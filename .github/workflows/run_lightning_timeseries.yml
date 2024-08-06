@@ -25,5 +25,5 @@ jobs:
 
     - name: Run lightning_timeseries.py
       run: 
-        source activate myenv
+        source activate test
         python lightning_timeseries.py
