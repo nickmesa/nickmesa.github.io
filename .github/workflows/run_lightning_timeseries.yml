@@ -1,0 +1,22 @@
+name: Run Script Every 5 minutes
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+jobs:
+  run_script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.11'
+
+    - name: Run lightning_timeseries.py
+      run: 
+        python lightning_timeseries.py
