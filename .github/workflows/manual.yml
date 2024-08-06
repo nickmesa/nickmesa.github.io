@@ -28,3 +28,9 @@ jobs:
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
         python .github/workflows/lightning_timeseries.py
+
+    - name: Upload figure artifact
+      uses: actions/upload-artifact@v3
+      with:
+          name: figure
+          path: Total_Energy_Timeseries_Figs/figure.png
