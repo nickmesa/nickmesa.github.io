@@ -251,4 +251,4 @@ plt.plot(start_datetime, total_energy_list)
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
 plt.xlabel('Time')
 plt.ylabel('Total Energy (J)')
-plt.savefig(f'{current_dt.year}{current_dt.month}{current_dt.day}T{current_dt/hour}:00_total_energy.png'}
+plt.savefig(f'{current_dt.year}{current_dt.month}{current_dt.day}T{current_dt/hour}:00_total_energy.png')
