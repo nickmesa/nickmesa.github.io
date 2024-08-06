@@ -16,6 +16,7 @@ jobs:
       with:
         auto-update-conda: true
         python-version: '3.11'
+        activate-environment: test
 
     - name: Set up Python
       uses: actions/setup-python@v2
@@ -24,6 +25,4 @@ jobs:
 
     - name: Run lightning_timeseries.py
       run: 
-        conda activate test
         python lightning_timeseries.py
-      shell: bash
