@@ -22,7 +22,7 @@ jobs:
       run: conda env create -f test.yml
 
     - name: Activate Conda environment
-      run: echo "conda activate myenv" >> $GITHUB_ENV
+      run: echo "conda activate test" >> $GITHUB_ENV
 
     - name: Set up Python
       uses: actions/setup-python@v2
