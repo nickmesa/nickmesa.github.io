@@ -12,6 +12,18 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
 
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        auto-update-conda: true
+        python-version: '3.11'
+        
+    - name: Create Conda environment
+      run: conda env create -f test.yml
+
+    - name: Activate Conda environment
+      run: echo "conda activate myenv" >> $GITHUB_ENV
+
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
@@ -19,4 +31,5 @@ jobs:
 
     - name: Run lightning_timeseries.py
       run: 
+        conda activate myenv
         python lightning_timeseries.py
