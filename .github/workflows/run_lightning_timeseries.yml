@@ -18,9 +18,6 @@ jobs:
         auto-update-conda: true
         python-version: '3.11'
 
-    - name: Activate Conda environment
-      run: echo "conda activate test" >> $GITHUB_ENV
-
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
@@ -28,5 +25,5 @@ jobs:
 
     - name: Run lightning_timeseries.py
       run: 
-        conda activate myenv
+        source activate myenv
         python lightning_timeseries.py
