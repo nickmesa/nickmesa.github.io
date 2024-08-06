@@ -25,4 +25,4 @@ jobs:
 
     - name: Run lightning_timeseries.py
       run: 
-        python .github/workflows/lightning_timeseries.py/lightning_timeseries.py
+        python .github/workflows/lightning_timeseries.py
