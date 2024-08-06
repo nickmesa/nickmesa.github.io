@@ -17,9 +17,6 @@ jobs:
       with:
         auto-update-conda: true
         python-version: '3.11'
-        
-    - name: Create Conda environment
-      run: conda env create -f CondaEnvs/test.yml
 
     - name: Activate Conda environment
       run: echo "conda activate test" >> $GITHUB_ENV
