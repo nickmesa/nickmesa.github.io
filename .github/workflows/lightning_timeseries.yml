@@ -3,6 +3,9 @@ name: Lightning Timeseries
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write  # Grant the necessary permission to write to the repository
+
 jobs:
   run_script:
     runs-on: ubuntu-latest
