@@ -26,14 +26,13 @@ jobs:
     - name: Print working directory
       run: pwd
 
-    - name: Activate env
+    - name: Run code
+      shell: python
       run: 
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
-
-    - name: Run code
-      shell: python
-      run: |
+        
+        |
 
         import numpy as np
         import boto3
