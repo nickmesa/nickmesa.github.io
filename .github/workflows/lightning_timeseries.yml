@@ -28,7 +28,7 @@ jobs:
         pip install Python-IO
         pip install pandas
         pip install matplotlib
-        pip install ftplib
+        pip install pyftpdlib
         pip install cartopy
         pip install datetime
         pip install netCDF4
