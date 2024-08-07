@@ -210,7 +210,7 @@ DOY = get_doy(current_dt.year, current_dt.month, current_dt.day)
 
 LON_MIN = 275
 LON_MAX = 290
-LAT_MIN = 5.0
+LAT_MIN = 10.0
 LAT_MAX = 15.0
 
 LAT_ARRAY = np.arange(LAT_MIN, LAT_MAX + 0.02, 0.02)
