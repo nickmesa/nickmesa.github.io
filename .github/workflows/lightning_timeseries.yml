@@ -32,7 +32,7 @@ jobs:
         pip install cartopy
         pip install datetime
         pip install netCDF4
-        pip install os
+        pip install os-sys
     
 
     - name: Run lightning_timeseries script
