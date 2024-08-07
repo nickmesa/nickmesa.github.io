@@ -31,3 +31,13 @@ jobs:
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
         python lightning_timeseries.py
+
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add plot.png
+        git commit -m "Add plot"
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
