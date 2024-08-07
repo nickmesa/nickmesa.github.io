@@ -29,8 +29,8 @@ jobs:
         conda activate test
         python .github/workflows/lightning_timeseries.py
 
-    - name: List files in output directory
-      run: ls -R Total_Energy_Timeseries_Figs
+    - name: List directory contents
+      run: ls -la
 
     - name: Upload figure as artifact
       uses: actions/upload-artifact@v3
