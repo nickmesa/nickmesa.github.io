@@ -25,7 +25,7 @@ jobs:
         pip install numpy
         pip install boto3
         pip install botocore
-        pip install io
+        pip install Python-IO
         pip install pandas
         pip install matplotlib
         pip install ftplib
