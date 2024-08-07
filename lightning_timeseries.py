@@ -12,6 +12,10 @@ from netCDF4 import Dataset
 from io import BytesIO
 #import os
 
+def flatten(t):
+    #removes nested lists
+    return [item for sublist in t for item in sublist]
+
 def get_doy(year, month, day):
     return dt.datetime(year, month, day).timetuple().tm_yday
 
