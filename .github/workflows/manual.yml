@@ -32,12 +32,8 @@ jobs:
     - name: List files in output directory
       run: ls -R Total_Energy_Timeseries_Figs
 
-    - name: Commit and push output image
-      run: |
-        git config --global user.name 'github-actions'
-        git config --global user.email 'github-actions@github.com'
-        git add Total_Energy_Timeseries_Figs/total_energy_timeseries.png
-        git commit -m 'Add output image'
-        git push
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: total-energy-timeseries-image
+        path: Total_Energy_Timeseries_Figs/total_energy_timeseries.png
