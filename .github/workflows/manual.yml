@@ -28,3 +28,13 @@ jobs:
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
         python .github/workflows/lightning_timeseries.py
+
+    - name: Commit and push output image
+      run: |
+        git config --global user.name 'nickmesa'
+        git config --global user.email 'nickmesa021@gmail.com'
+        git add total_energy_timeseries.png
+        git commit -m 'Add output image'
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
