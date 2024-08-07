@@ -29,6 +29,9 @@ jobs:
         conda activate test
         python .github/workflows/lightning_timeseries.py
 
+    - name: List files in output directory
+      run: ls -R Total_Energy_Timeseries_Figs
+
     - name: Commit and push output image
       run: |
         git config --global user.name 'github-actions'
