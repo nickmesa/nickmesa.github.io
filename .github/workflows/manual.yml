@@ -26,6 +26,11 @@ jobs:
     - name: Print working directory
       run: pwd
 
+    - name: Activate env
+      run: 
+        source $(conda info --base)/etc/profile.d/conda.sh
+        conda activate test
+
     - name: Run code
       shell: python
       run: |
