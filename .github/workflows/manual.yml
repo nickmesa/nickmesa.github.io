@@ -32,5 +32,5 @@ jobs:
     - name: Upload figure artifact
       uses: actions/upload-artifact@v3
       with:
-          name: figure
-          path: Total_Energy_Timeseries_Figs/figure.png
+          name: total_energy_timeseries
+          path: Total_Energy_Timeseries_Figs/total_energy_timeseries.png
