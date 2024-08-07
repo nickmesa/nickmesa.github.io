@@ -230,7 +230,7 @@ s3 = boto3.resource('s3', config = Config(signature_version = botocore.UNSIGNED,
 bucket = s3.Bucket('noaa-goes16')
 
 filepaths = []
-for file in bucket.objects.filter(Prefix = f'GLM-L2-LCFA/{YYYY}/{DOY}'):
+for file in bucket.objects.filter(Prefix = f'GLM-L2-LCFA/{YYYY}/{DOY}/{current_dt.hour}'):
     filepaths.append(file.key)
 
 start_datetime, filepaths_grouped = group_filepaths(filepaths)
