@@ -229,7 +229,7 @@ s3 = boto3.resource('s3', config = Config(signature_version = botocore.UNSIGNED,
 bucket = s3.Bucket('noaa-goes16')
 
 filepaths = []
-for file in bucket.objects.filter(Prefix = f'GLM-L2-LCFA/{YYYY}/{DOY}/{current_dt.hour}'):
+for file in bucket.objects.filter(Prefix = f'GLM-L2-LCFA/{YYYY}/{DOY}'):
     filepaths.append(file.key)
 
 start_datetime, filepaths_grouped = group_filepaths(filepaths)
@@ -257,6 +257,10 @@ plt.plot(start_datetime, total_energy_list)
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
 plt.xlabel('Time')
 plt.ylabel('Total Energy (J)')
+
+# Format the x-axis for dates to include month day and time (label formatting, rotation)
+plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+plt.gcf().autofmt_xdate()
 
 #output_dir = 'Total_Energy_Timeseries_Figs'
 #os.makedirs(output_dir, exist_ok = True)
