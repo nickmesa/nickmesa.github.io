@@ -23,6 +23,9 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Print working directory
+      run: pwd
+
     - name: Run lightning_timeseries.py
       run: 
         source $(conda info --base)/etc/profile.d/conda.sh
