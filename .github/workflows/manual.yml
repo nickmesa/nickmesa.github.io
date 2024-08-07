@@ -34,7 +34,7 @@ jobs:
       shell: bash
 
     - name: List files in output directory
-      run: ls -R pwd
+      run: ls -R 
 
     - name: Commit and push output image
       run: |
