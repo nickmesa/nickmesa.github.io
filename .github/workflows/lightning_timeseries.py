@@ -10,6 +10,7 @@ import cartopy.crs as ccrs
 import datetime as dt
 from netCDF4 import Dataset
 from io import BytesIO
+import os
 
 def get_doy(year, month, day):
     return dt.datetime(year, month, day).timetuple().tm_yday
@@ -251,4 +252,8 @@ plt.plot(start_datetime, total_energy_list)
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
 plt.xlabel('Time')
 plt.ylabel('Total Energy (J)')
-plt.savefig('Total_Energy_Timeseries_Figs/total_energy_timeseries.png')
+
+output_dir = 'Total_Energy_Timeseries_Figs'
+os.makedirs(output_dir, exist_ok = True)
+output_path = os.path.join(output_dir, "total_energy_timeseries.png")
+plt.savefig(output_path)
