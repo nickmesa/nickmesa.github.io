@@ -45,12 +45,25 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        # Check if there are any changes to commit
+        
+        # Stash any local changes
+        git stash
+        
+        # Pull the latest changes
+        git pull --rebase origin main || true
+        
+        # Apply stashed changes
+        git stash pop || true
+        
+        # Add changes to commit
+        git add figure.png  # Ensure this matches the saved plot file name
+        
+        # Check if there are changes to commit
         if [ -n "$(git status --porcelain)" ]; then
-          git add figure.png  # Ensure this matches the saved plot file name
           git commit -m "Update plot"
         fi
-        git pull --rebase origin main  # Pull the latest changes
+        
+        # Push the changes
         git push
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
