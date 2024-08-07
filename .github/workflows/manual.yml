@@ -33,6 +33,9 @@ jobs:
         python .github/workflows/lightning_timeseries.py
       shell: bash
 
+    -  name: Print working directory
+       run: pwd
+
     - name: List files in output directory
       run: ls -R 
 
