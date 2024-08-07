@@ -1,0 +1,30 @@
+name: Lightning Timeseries
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run_script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        auto-update-conda: true
+        python-version: '3.11'
+        activate-environment: test
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.11'
+
+    - name: Run lightning_timeseries.py
+      run: 
+        source $(conda info --base)/etc/profile.d/conda.sh
+        conda activate test
+        python .github/workflows/lightning_timeseries.py
