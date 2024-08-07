@@ -9,17 +9,17 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: Set up Miniconda
-      uses: conda-incubator/setup-miniconda@v2
+      uses: conda-incubator/setup-miniconda@v3
       with:
         auto-update-conda: true
         python-version: '3.11'
         activate-environment: test
 
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v3
       with:
         python-version: '3.11'
 
@@ -32,8 +32,8 @@ jobs:
     - name: List files in output directory
       run: ls -R Total_Energy_Timeseries_Figs
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v2
+    - name: Upload figure as artifact
+      uses: actions/upload-artifact@v3
       with:
         name: figure
         path: figure.png
