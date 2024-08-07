@@ -34,7 +34,7 @@ jobs:
       shell: bash
 
     - name: List files in output directory
-      run: ls -R Total_Energy_Timeseries_Figs
+      run: ls -R pwd
 
     - name: Commit and push output image
       run: |
