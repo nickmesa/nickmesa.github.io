@@ -35,6 +35,16 @@ jobs:
     - name: List files in output directory
       run: ls -R Total_Energy_Timeseries_Figs
 
+    - name: Commit and push output image
+      run: |
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
+        git add /home/runner/work/nickmesa.github.io/nickmesa.github.io/Total_Energy_Timeseries_Figs/figure.png
+        git commit -m 'Add output image'
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Upload figure as artifact
       uses: actions/upload-artifact@v3
       with:
