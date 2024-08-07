@@ -3,6 +3,7 @@ name: Lightning Timeseries
 on:
   schedule:
     - cron: "*/15 * * * *"  # Runs every 15 minutes
+  workflow_dispatch:  # Allows manual triggering
 
 permissions:
   contents: write  # Grant the necessary permission to write to the repository
@@ -44,6 +45,7 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
+        git pull --rebase origin main  # Pull the latest changes
         git add figure.png
         git commit -m "Add plot"
         git push
