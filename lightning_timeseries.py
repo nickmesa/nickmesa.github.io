@@ -10,7 +10,7 @@ import cartopy.crs as ccrs
 import datetime as dt
 from netCDF4 import Dataset
 from io import BytesIO
-import os
+#import os
 
 def get_doy(year, month, day):
     return dt.datetime(year, month, day).timetuple().tm_yday
