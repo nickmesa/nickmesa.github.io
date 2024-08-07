@@ -10,6 +10,7 @@ import cartopy.crs as ccrs
 import datetime as dt
 from netCDF4 import Dataset
 from io import BytesIO
+from scipy import stats
 #import os
 
 def flatten(t):
