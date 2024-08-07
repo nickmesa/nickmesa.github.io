@@ -31,6 +31,7 @@ jobs:
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
         python .github/workflows/lightning_timeseries.py
+      shell: bash
 
     - name: List files in output directory
       run: ls -R Total_Energy_Timeseries_Figs
