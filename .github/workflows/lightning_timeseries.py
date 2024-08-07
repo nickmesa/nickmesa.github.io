@@ -256,5 +256,5 @@ ax.set_ylabel('Total Energy (J)')
 #output_dir = 'Total_Energy_Timeseries_Figs'
 #os.makedirs(output_dir, exist_ok = True)
 #output_path = os.path.join(output_dir, "total_energy_timeseries.png")
-print('i hate this shit')
-plt.savefig('figure.png')
+#print('i hate this shit')
+plt.savefig('/home/runner/work/nickmesa.github.io/nickmesa.github.io/figure.png')
