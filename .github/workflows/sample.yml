@@ -3,6 +3,9 @@ name: Create Plot
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write  # Grant the necessary permission to write to the repository
+
 jobs:
   create_plot:
     runs-on: ubuntu-latest
