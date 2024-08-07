@@ -31,8 +31,8 @@ jobs:
 
     - name: Commit and push output image
       run: |
-        git config --global user.name 'nickmesa'
-        git config --global user.email 'nickmesa021@gmail.com'
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
         git add Total_Energy_Timeseries_Figs/total_energy_timeseries.png
         git commit -m 'Add output image'
         git push
