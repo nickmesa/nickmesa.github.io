@@ -30,7 +30,7 @@ jobs:
       run: 
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
-        python .github/workflows/lightning_timeseries.py
+        python lightning_timeseries.py
       shell: bash
 
     -  name: Print working directory
@@ -43,7 +43,7 @@ jobs:
       run: |
         git config --global user.name 'github-actions'
         git config --global user.email 'github-actions@github.com'
-        git add /home/runner/work/nickmesa.github.io/nickmesa.github.io/Total_Energy_Timeseries_Figs/figure.png
+        git add /home/runner/work/nickmesa.github.io/nickmesa.github.io/figure.png
         git commit -m 'Add output image'
         git push
       env:
