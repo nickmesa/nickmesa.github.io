@@ -41,13 +41,16 @@ jobs:
       run: 
         python lightning_timeseries.py
 
-    - name: Commit and push changes
+    - name: Handle changes and push updates
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
+        # Check if there are any changes to commit
+        if [ -n "$(git status --porcelain)" ]; then
+          git add figure.png  # Ensure this matches the saved plot file name
+          git commit -m "Update plot"
+        fi
         git pull --rebase origin main  # Pull the latest changes
-        git add figure.png
-        git commit -m "Add plot"
         git push
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
