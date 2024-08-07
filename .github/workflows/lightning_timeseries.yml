@@ -23,8 +23,8 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Run lightning_timeseries.py
+    - name: Run lightning_timeseries script
       run: 
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate test
-        python .github/workflows/lightning_timeseries.py
+        python lightning_timeseries.py
