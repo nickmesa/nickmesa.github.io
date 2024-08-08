@@ -245,13 +245,22 @@ for idx, filegroup in enumerate(filepaths_grouped):
 
     lats_l, lons_l, ener_l, area_l, flag_l, flid_l, lats_lf, lons_lf, ener_lf, area_lf, flag_lf = realtime_read_glm_filelist(filepaths_grouped[idx], LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, apply_qc=False, output_qc=False)
 
-    total_energy = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
-    mean_group_area = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
-    #group_count = np.transpose(bin_statistic(lats_l,lons_l,ener_l,LAT_BINS,LON_BINS,'count'))
+    if len(lats_l) + len(lons_l) + len(ener_l) + len(area_l) + len(flag_l) + len(flid_l) + len(lats_lf) + len(lons_lf) + len(ener_lf) + len(area_lf) + len(flag_lf) == 0:
+        print('No lightning in area of interest')
+        
+        total_energy = 0
+        mean_group_area = 0
+        #group_count = 0
+        
+    else:
 
-    total_energy_list.append(np.sum(total_energy))
-    #mean_group_area_list.append(mean_group_area)
-    #group_count_list.append(group_count)
+        total_energy = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
+        mean_group_area = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
+        #group_count = np.transpose(bin_statistic(lats_l,lons_l,ener_l,LAT_BINS,LON_BINS,'count'))
+
+total_energy_list.append(np.sum(total_energy))
+mean_group_area_list.append(mean_group_area)
+#group_count_list.append(group_count)
 
 
 # Plot the total energy
