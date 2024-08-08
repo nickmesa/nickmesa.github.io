@@ -253,6 +253,24 @@ for idx, filegroup in enumerate(filepaths_grouped):
     #mean_group_area_list.append(mean_group_area)
     #group_count_list.append(group_count)
 
+
+# Plot the total energy
+plt.figure(figsize=(12,12))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines(resolution='50m')
+
+# Add gridlines
+gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                  linewidth=2, color='gray', alpha=0.5, linestyle='--')
+
+masked_total_energy = np.ma.masked_where(total_energy == 0, total_energy)
+
+plt.pcolormesh(LON_M_ARRAY - 360,LAT_M_ARRAY,masked_total_energy, cmap='winter', transform=ccrs.PlateCarree(), vmin = 0, vmax = 1e-14)
+plt.colorbar(label='Total Energy (J)', shrink=0.8)
+plt.title('GLM Total Energy')
+plt.savefig('map.png')
+plt.close()
+
 plt.figure(figsize=(12, 6))
 plt.plot(start_datetime, total_energy_list)
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
@@ -263,10 +281,6 @@ plt.ylabel('Total Energy (J)')
 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
 plt.gcf().autofmt_xdate()
 
-#output_dir = 'Total_Energy_Timeseries_Figs'
-#os.makedirs(output_dir, exist_ok = True)
-#output_path = os.path.join(output_dir, "total_energy_timeseries.png")
-#print('i hate this shit')
-#figure_path = os.path.join(os.getcwd(), '/Total_Energy_Timeseries_Figs/figure.png')
-plt.savefig('figure.png')
-#plt.savefig('/home/runner/work/nickmesa.github.io/nickmesa.github.io/figure.png')
+plt.savefig('timeseries.png')
+
+plt.close()
