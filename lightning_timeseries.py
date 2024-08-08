@@ -273,6 +273,7 @@ gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
                   linewidth=2, color='gray', alpha=0.5, linestyle='--')
 
 if np.sum(total_energy) == 0:
+    print('No energy in map')
 else:
     lng_eng_masked = np.ma.masked_where(total_energy == 0, total_energy)
     lng_area_masked = np.ma.masked_where(mean_group_area == 0, mean_group_area)
