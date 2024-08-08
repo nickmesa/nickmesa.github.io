@@ -258,9 +258,9 @@ for idx, filegroup in enumerate(filepaths_grouped):
         mean_group_area = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
         #group_count = np.transpose(bin_statistic(lats_l,lons_l,ener_l,LAT_BINS,LON_BINS,'count'))
 
-total_energy_list.append(np.sum(total_energy))
-mean_group_area_list.append(mean_group_area)
-#group_count_list.append(group_count)
+    total_energy_list.append(np.sum(total_energy))
+    mean_group_area_list.append(mean_group_area)
+    #group_count_list.append(group_count)
 
 
 # Plot the total energy
