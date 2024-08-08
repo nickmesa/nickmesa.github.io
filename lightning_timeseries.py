@@ -288,7 +288,7 @@ sorted_area = sorted_combined['area']
 scaled_sorted_energy = sorted_energy * 1e13
 
 # Scale the sorted area values for visualization
-scaled_sorted_area = sorted_area / 1e7 
+scaled_sorted_area = sorted_area
 
 # Plot with the sorted values
 scatter = plt.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
