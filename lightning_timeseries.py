@@ -309,7 +309,7 @@ ax.set_ylabel('Total Energy (J)')
 
 # Format the x-axis for dates to include month day and time (label formatting, rotation)
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-ax.autofmt_xdate()
+fig.autofmt_xdate()
 plt.savefig('timeseries.png')
 
 plt.close()
