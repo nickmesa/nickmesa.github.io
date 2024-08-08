@@ -272,8 +272,10 @@ ax.coastlines(resolution='50m')
 gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
                   linewidth=2, color='gray', alpha=0.5, linestyle='--')
 
-lng_eng_masked = np.ma.masked_where(total_energy == 0, total_energy)
-lng_area_masked = np.ma.masked_where(mean_group_area == 0, mean_group_area)
+if np.sum(total_energy) == 0:
+else:
+    lng_eng_masked = np.ma.masked_where(total_energy == 0, total_energy)
+    lng_area_masked = np.ma.masked_where(mean_group_area == 0, mean_group_area)
 
 #Plot lightning energy and area using weighted scatterplot
 flattened_energy = lng_eng_masked.flatten()
