@@ -266,8 +266,9 @@ gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
 masked_total_energy = np.ma.masked_where(total_energy == 0, total_energy)
 
 plt.pcolormesh(LON_M_ARRAY - 360,LAT_M_ARRAY,masked_total_energy, cmap='winter', transform=ccrs.PlateCarree(), vmin = 0, vmax = 1e-14)
-plt.colorbar(label='Total Energy (J)', shrink=0.8)
-plt.title('GLM Total Energy')
+plt.colorbar(label='Total Energy (J)', shrink=0.5, pad = 0.1)
+plt.title('5 Min GLM Total Energy')
+plt.tight_layout(pad = 1.0)
 plt.savefig('map.png')
 plt.close()
 
