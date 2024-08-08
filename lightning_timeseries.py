@@ -291,10 +291,10 @@ scaled_sorted_energy = sorted_energy * 1e13
 scaled_sorted_area = sorted_area / 1e7 
 
 # Plot with the sorted values
-scatter = ax.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
+scatter = plt.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
 
 #plt.pcolormesh(LON_M_ARRAY - 360,LAT_M_ARRAY,masked_total_energy, cmap='winter', transform=ccrs.PlateCarree(), vmin = 0, vmax = 1e-14)
-fig.colorbar(scatter, orientation = 'vertical', label = 'Total Energy * 1e13 (J)', pad = 0.1)
+fig.colorbar(scatter, orientation = 'vertical', label = 'Total Energy * 1e13 (J)', pad = 0.1, shrink = 0.6)
 plt.title('5 Min GLM Total Energy')
 plt.tight_layout(pad = 1.0)
 plt.savefig('map.png')
