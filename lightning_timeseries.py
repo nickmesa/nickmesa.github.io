@@ -208,10 +208,10 @@ current_dt = dt.datetime.now()
 YYYY = current_dt.year
 DOY = get_doy(current_dt.year, current_dt.month, current_dt.day)
 
-LON_MIN = 275
-LON_MAX = 290
-LAT_MIN = 10.0
-LAT_MAX = 15.0
+LON_MIN = 315
+LON_MAX = 330
+LAT_MIN = 0.0
+LAT_MAX = 20.0
 
 LAT_ARRAY = np.arange(LAT_MIN, LAT_MAX + 0.02, 0.02)
 LON_ARRAY = np.arange(LON_MIN, LON_MAX + 0.02, 0.02)
