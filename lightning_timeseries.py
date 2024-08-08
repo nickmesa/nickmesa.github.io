@@ -255,8 +255,8 @@ for idx, filegroup in enumerate(filepaths_grouped):
 
 
 # Plot the total energy
-fig = plt.figure(figsize=(12,12))
-ax = plt.axes(projection=ccrs.PlateCarree())
+fig = plt.figure(figsize=(11,8.5))
+ax = fig.add_subplot(1, 1, 1, projection = ccrs.PlateCarree())
 ax.coastlines(resolution='50m')
 
 # Add gridlines
@@ -291,25 +291,25 @@ scaled_sorted_energy = sorted_energy * 1e13
 scaled_sorted_area = sorted_area
 
 # Plot with the sorted values
-scatter = plt.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
+scatter = ax.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
 
-#plt.pcolormesh(LON_M_ARRAY - 360,LAT_M_ARRAY,masked_total_energy, cmap='winter', transform=ccrs.PlateCarree(), vmin = 0, vmax = 1e-14)
 fig.colorbar(scatter, orientation = 'vertical', label = 'Total Energy * 1e13 (J)', pad = 0.1, shrink = 0.6)
 plt.title('5 Min GLM Total Energy')
 plt.tight_layout(pad = 1.0)
 plt.savefig('map.png')
 plt.close()
 
-plt.figure(figsize=(12, 6))
-plt.plot(start_datetime, total_energy_list)
+fig = plt.figure(figsize=(12, 6))
+ax = fig.add_subplot(1, 1, 1)
+ax.plot(start_datetime, total_energy_list)
+ax.plot(start_datetime[-1], total_energy_list[-1], marker = '*')
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
-plt.xlabel('Time')
-plt.ylabel('Total Energy (J)')
+plt.set_xlabel('Time')
+plt.set_ylabel('Total Energy (J)')
 
 # Format the x-axis for dates to include month day and time (label formatting, rotation)
-plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-plt.gcf().autofmt_xdate()
-
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+ax.autofmt_xdate()
 plt.savefig('timeseries.png')
 
 plt.close()
