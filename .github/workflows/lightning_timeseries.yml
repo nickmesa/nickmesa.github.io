@@ -56,11 +56,12 @@ jobs:
         git stash pop || true
         
         # Add changes to commit
-        git add figure.png  # Ensure this matches the saved plot file name
+        git add timeseries.png  # Ensure this matches the saved plot file name
+        git add map.png
         
         # Check if there are changes to commit
         if [ -n "$(git status --porcelain)" ]; then
-          git commit -m "Update plot"
+          git commit -m "Update plots"
         fi
         
         # Push the changes
