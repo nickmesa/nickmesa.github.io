@@ -255,7 +255,7 @@ for idx, filegroup in enumerate(filepaths_grouped):
 
 
 # Plot the total energy
-plt.figure(figsize=(12,12))
+fig = plt.figure(figsize=(12,12))
 ax = plt.axes(projection=ccrs.PlateCarree())
 ax.coastlines(resolution='50m')
 
@@ -263,10 +263,37 @@ ax.coastlines(resolution='50m')
 gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
                   linewidth=2, color='gray', alpha=0.5, linestyle='--')
 
-masked_total_energy = np.ma.masked_where(total_energy == 0, total_energy)
+lng_eng_masked = np.ma.masked_where(total_energy == 0, total_energy)
 
-plt.pcolormesh(LON_M_ARRAY - 360,LAT_M_ARRAY,masked_total_energy, cmap='winter', transform=ccrs.PlateCarree(), vmin = 0, vmax = 1e-14)
-plt.colorbar(label='Total Energy (J)', shrink=0.5, pad = 0.1)
+#Plot lightning energy and area using weighted scatterplot
+flattened_energy = lng_eng_masked.flatten()
+flattened_area = lng_area_masked.flatten()
+flattened_lons = LON_M_ARRAY.flatten()
+flattened_lats = LAT_M_ARRAY.flatten()
+
+combined = np.array(list(zip(flattened_lons, flattened_lats, flattened_energy, flattened_area)),
+            dtype=[('longitude', 'f4'), ('latitude', 'f4'), ('energy', 'f4'), ('area', 'f4')])
+
+
+sorted_combined = np.sort(combined, order='energy')
+
+# Extract the sorted longitude, latitude, and energy
+sorted_longitude = sorted_combined['longitude']
+sorted_latitude = sorted_combined['latitude']
+sorted_energy = sorted_combined['energy']
+sorted_area = sorted_combined['area']
+
+# Scale the sorted energy values for visualization
+scaled_sorted_energy = sorted_energy * 1e13
+
+# Scale the sorted area values for visualization
+scaled_sorted_area = sorted_area / 1e7 
+
+# Plot with the sorted values
+scatter = ax.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
+
+#plt.pcolormesh(LON_M_ARRAY - 360,LAT_M_ARRAY,masked_total_energy, cmap='winter', transform=ccrs.PlateCarree(), vmin = 0, vmax = 1e-14)
+fig.colorbar(scatter, orientation = 'vertical', label = 'Total Energy * 1e13 (J)', pad = 0.1)
 plt.title('5 Min GLM Total Energy')
 plt.tight_layout(pad = 1.0)
 plt.savefig('map.png')
