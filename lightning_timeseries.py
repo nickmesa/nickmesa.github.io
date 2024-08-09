@@ -316,6 +316,7 @@ ax = fig.add_subplot(1, 1, 1)
 ax.plot(start_datetime, total_energy_list)
 ax.plot(start_datetime[-1], total_energy_list[-1], marker = '*')
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
+ax.set_ylim(0,1e-12)
 ax.set_xlabel('Time')
 ax.set_ylabel('Total Energy (J)')
 
