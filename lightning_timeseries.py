@@ -208,9 +208,9 @@ current_dt = dt.datetime.now()
 YYYY = current_dt.year
 DOY = get_doy(current_dt.year, current_dt.month, current_dt.day)
 
-LON_MIN = 315
-LON_MAX = 330
-LAT_MIN = 0.0
+LON_MIN = 295
+LON_MAX = 308
+LAT_MIN = 12.0
 LAT_MAX = 20.0
 
 LAT_ARRAY = np.arange(LAT_MIN, LAT_MAX + 0.02, 0.02)
@@ -316,7 +316,7 @@ ax = fig.add_subplot(1, 1, 1)
 ax.plot(start_datetime, total_energy_list)
 ax.plot(start_datetime[-1], total_energy_list[-1], marker = '*')
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
-ax.set_ylim(0,1e-12)
+ax.set_ylim(0,1e-10)
 ax.set_xlabel('Time')
 ax.set_ylabel('Total Energy (J)')
 
