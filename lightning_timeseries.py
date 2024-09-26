@@ -321,7 +321,7 @@ ax.set_xlabel('Time')
 ax.set_ylabel('Total Energy (fJ)')
 
 ax2 = ax.twinx()
-ax2.plot(start_datetime, group_count_list)
+ax2.plot(start_datetime, group_count_list, color = 'red')
 
 # Format the x-axis for dates to include month day and time (label formatting, rotation)
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
