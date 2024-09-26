@@ -258,7 +258,7 @@ for idx, filegroup in enumerate(filepaths_grouped):
         mean_group_area = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
         #group_count = np.transpose(bin_statistic(lats_l,lons_l,ener_l,LAT_BINS,LON_BINS,'count'))
 
-    total_energy_list.append(np.sum(total_energy))
+    total_energy_list.append(np.sum(total_energy) * 10 ** 15)
     mean_group_area_list.append(mean_group_area)
     #group_count_list.append(group_count)
 
@@ -297,7 +297,7 @@ sorted_energy = sorted_combined['energy']
 sorted_area = sorted_combined['area']
 
 # Scale the sorted energy values for visualization
-scaled_sorted_energy = sorted_energy * 1e13
+scaled_sorted_energy = sorted_energy
 
 # Scale the sorted area values for visualization
 scaled_sorted_area = sorted_area
@@ -305,7 +305,7 @@ scaled_sorted_area = sorted_area
 # Plot with the sorted values
 scatter = ax.scatter(sorted_longitude, sorted_latitude, s=scaled_sorted_area, c=scaled_sorted_energy, cmap='viridis', transform=ccrs.PlateCarree(), alpha=0.6, marker='o', vmin = 0, vmax = 10)
 
-fig.colorbar(scatter, orientation = 'vertical', label = 'Total Energy * 1e13 (J)', pad = 0.1, shrink = 0.6)
+fig.colorbar(scatter, orientation = 'vertical', label = 'Total Energy (fJ)', pad = 0.1, shrink = 0.6)
 plt.title('5 Min GLM Total Energy')
 plt.tight_layout(pad = 1.0)
 plt.savefig('map.png')
@@ -316,9 +316,9 @@ ax = fig.add_subplot(1, 1, 1)
 ax.plot(start_datetime, total_energy_list)
 ax.plot(start_datetime[-1], total_energy_list[-1], marker = '*')
 plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Latitude and {LON_MIN - 360 } to {LON_MAX - 360} Longitude') 
-ax.set_ylim(0,1e-10)
+ax.set_ylim(0,20000)
 ax.set_xlabel('Time')
-ax.set_ylabel('Total Energy (J)')
+ax.set_ylabel('Total Energy (fJ)')
 
 # Format the x-axis for dates to include month day and time (label formatting, rotation)
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
