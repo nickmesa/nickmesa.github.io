@@ -250,17 +250,17 @@ for idx, filegroup in enumerate(filepaths_grouped):
         
         total_energy = 0
         mean_group_area = 0
-        #group_count = 0
+        group_count = 0
         
     else:
 
         total_energy = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
         mean_group_area = np.transpose(bin_statistic(lats_l[~np.isnan(ener_l)],lons_l[~np.isnan(ener_l)],ener_l[~np.isnan(ener_l)],LAT_BINS,LON_BINS,'sum').astype(np.float32))
-        #group_count = np.transpose(bin_statistic(lats_l,lons_l,ener_l,LAT_BINS,LON_BINS,'count'))
+        group_count = np.transpose(bin_statistic(lats_l,lons_l,ener_l,LAT_BINS,LON_BINS,'count'))
 
     total_energy_list.append(np.sum(total_energy) * 10 ** 15)
     mean_group_area_list.append(mean_group_area)
-    #group_count_list.append(group_count)
+    group_count_list.append(group_count)
 
 
 # Plot the total energy
@@ -319,6 +319,9 @@ plt.title(f'Total Energy Time Series within Domain of {LAT_MIN} to {LAT_MAX} Lat
 ax.set_ylim(0,20000)
 ax.set_xlabel('Time')
 ax.set_ylabel('Total Energy (fJ)')
+
+ax2 = ax.twinx()
+ax2.plot(start_datetime, group_count_list)
 
 # Format the x-axis for dates to include month day and time (label formatting, rotation)
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
