@@ -260,7 +260,7 @@ for idx, filegroup in enumerate(filepaths_grouped):
 
     total_energy_list.append(np.sum(total_energy) * 10 ** 15)
     mean_group_area_list.append(mean_group_area)
-    group_count_list.append(group_count)
+    group_count_list.append(np.sum(group_count))
 
 
 # Plot the total energy
