@@ -208,8 +208,8 @@ current_dt = dt.datetime.now()
 YYYY = current_dt.year
 DOY = get_doy(current_dt.year, current_dt.month, current_dt.day)
 
-LON_MIN = 260
-LON_MAX = 270
+LON_MIN = 278
+LON_MAX = 288
 LAT_MIN = 20.0
 LAT_MAX = 25.0
 
