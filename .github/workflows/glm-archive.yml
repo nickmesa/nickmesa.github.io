@@ -2,6 +2,8 @@ name: GLM add archive case
 
 # Run by hand from the Actions tab to add past disturbances to /lightning.
 # Fill in either "ids" (one or a few cases) or "seasons" (every case of whole seasons).
+# "layer" chooses what is produced: the lightning records, or the infrared images and
+# ERA5 vorticity for cases whose lightning record is already in the archive.
 on:
   workflow_dispatch:
     inputs:
@@ -29,6 +31,15 @@ on:
         description: "With seasons: process cases again that are already in the archive"
         type: boolean
         default: false
+      layer:
+        description: "lightning = the lightning record. ir = channel 13 images and ERA5 vorticity for cases already in the archive"
+        type: choice
+        options: [lightning, ir]
+        default: lightning
+      fill:
+        description: "With layer ir: process cases again that are still missing ERA5 hours (NCAR publishes ERA5 months behind)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -36,7 +47,7 @@ permissions:
 jobs:
   # ---- one or a few cases ----------------------------------------------------
   archive:
-    if: inputs.ids != ''
+    if: inputs.ids != '' && inputs.layer != 'ir'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     concurrency:
@@ -107,6 +118,7 @@ jobs:
 
   season:
     needs: seasons
+    if: inputs.layer != 'ir'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
@@ -161,7 +173,7 @@ jobs:
 
   collect:
     needs: [seasons, season]
-    if: ${{ !cancelled() && needs.seasons.result == 'success' }}
+    if: ${{ !cancelled() && needs.seasons.result == 'success' && inputs.layer != 'ir' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -204,3 +216,151 @@ jobs:
           SEASONS: ${{ inputs.seasons }}
         run: |
           bash tools/publish.sh "archive: seasons $SEASONS"
+
+  # ---- infrared images and ERA5 vorticity --------------------------------------
+  # These read the published lightning records (for each case's window and centers)
+  # and write to the glm-env branch, which holds one commit and no history.
+  ir_ids:
+    if: inputs.ids != '' && inputs.layer == 'ir'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    concurrency:
+      group: glm-env
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: glm-genesis-monitor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Check out the data branches
+        run: |
+          git fetch --depth=1 origin glm-data:glm-data
+          git worktree add public glm-data
+          if git fetch --depth=1 origin glm-env:glm-env 2>/dev/null; then
+            git worktree add public-env glm-env
+          else
+            git worktree add --orphan -b glm-env public-env
+          fi
+
+      - name: Process
+        env:
+          IDS: ${{ inputs.ids }}
+          GLM_CACHE_DIR: archive-cache
+        run: python -m pipeline.run_env --id "$IDS" --redo
+
+      - name: Publish
+        env:
+          IDS: ${{ inputs.ids }}
+        run: |
+          bash tools/publish_env.sh "env: $IDS"
+
+  ir_season:
+    needs: seasons
+    if: inputs.layer == 'ir'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix: ${{ fromJSON(needs.seasons.outputs.matrix || '{"include":[{"year":"2000","basin":"al"}]}') }}
+    defaults:
+      run:
+        working-directory: glm-genesis-monitor
+    env:
+      GLM_ENV_DIR: out/env
+      GLM_CACHE_DIR: archive-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Check out the lightning records and see what is already done
+        run: |
+          git fetch --depth=1 origin glm-data:glm-data
+          git worktree add public glm-data
+          mkdir -p out/env
+          if git fetch --depth=1 --filter=blob:none origin glm-env 2>/dev/null; then
+            git show FETCH_HEAD:env/index.json > out/env/index.json || rm -f out/env/index.json
+          fi
+
+      - name: Process
+        env:
+          YEAR: ${{ matrix.year }}
+          BASIN: ${{ matrix.basin }}
+          REDO: ${{ inputs.redo }}
+          FILL: ${{ inputs.fill }}
+        run: |
+          args=(--year "$YEAR" --basin "$BASIN" --max-hours 5)
+          [ "$REDO" = "true" ] && args+=(--redo)
+          [ "$FILL" = "true" ] && args+=(--fill)
+          python -m pipeline.run_env "${args[@]}"
+
+      - name: Hand the files to the collect job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-${{ matrix.year }}-${{ matrix.basin }}
+          path: glm-genesis-monitor/out/env
+          if-no-files-found: ignore
+          retention-days: 14
+
+  ir_collect:
+    needs: [seasons, ir_season]
+    if: ${{ !cancelled() && needs.seasons.result == 'success' && inputs.layer == 'ir' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: glm-env
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: glm-genesis-monitor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: env-*
+          path: glm-genesis-monitor/incoming
+
+      - name: Check out the image branch
+        run: |
+          if git fetch --depth=1 origin glm-env:glm-env 2>/dev/null; then
+            git worktree add public-env glm-env
+          else
+            git worktree add --orphan -b glm-env public-env
+          fi
+
+      - name: Add the files
+        run: |
+          mkdir -p incoming
+          python -m pipeline.run_env --merge incoming
+
+      - name: Publish
+        env:
+          SEASONS: ${{ inputs.seasons }}
+        run: |
+          bash tools/publish_env.sh "env: seasons $SEASONS"

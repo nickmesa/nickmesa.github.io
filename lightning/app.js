@@ -13,6 +13,11 @@
   // Left unset, each record uses its own 2nd-98th percentile range.
   var DOMAINS = window.GLM_DOMAINS || {};
   var MAP_HALF_KM = 260;
+  // Archived cases: channel 13 images and ERA5 vorticity (written by pipeline/env.py).
+  var ENV_BASE = EMBED ? null : (DEMO ? 'demo/env/' : (window.GLM_ENV_BASE || null));
+  var CCF_K = window.GLM_CCF_K || 208;                         // cold cloud threshold (K); see config.CCF_THRESHOLDS_K
+  var VORT_LEVELS = window.GLM_VORT_LEVELS || [5, 10, 20, 40]; // contours, 1e-5 s-1
+  var IR_GRAY = [310, 190];                                    // brightness temperatures drawn as black and as white
   var REFRESH_MS = 10 * 60 * 1000;
 
   var VARS = {
@@ -29,7 +34,8 @@
   // ------------------------------------------------------------------- state
   var st = {
     index: null, mode: 'realtime', id: null, S: null, coast: null,
-    cursor: 1, win: 6, colorBy: 'area', bin: 12, land: false, playing: false, hover: -1, C: {}
+    cursor: 1, win: 6, colorBy: 'area', bin: 12, land: false, playing: false, hover: -1, C: {},
+    envIndex: null, E: null, irLightning: true
   };
   var $ = function (id) { return document.getElementById(id); };
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -95,7 +101,7 @@
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
   function readColors() {
     var cs = getComputedStyle(document.documentElement), C = {};
-    ['bg', 'panel', 'ink', 'ink-2', 'muted', 'grid', 'axis', 'data', 'data-wash', 'cursor', 'cursor-fill', 'land', 'coast', 'gap', 'line']
+    ['bg', 'panel', 'ink', 'ink-2', 'muted', 'grid', 'axis', 'data', 'data-wash', 'cursor', 'cursor-fill', 'land', 'coast', 'gap', 'line', 'vort-low', 'vort-mid']
       .forEach(function (n) { C[n] = cs.getPropertyValue('--' + n).trim(); });
     var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(C.panel) || [0, 'ff', 'ff', 'ff'];
     C.dark = (parseInt(m[1], 16) * 0.299 + parseInt(m[2], 16) * 0.587 + parseInt(m[3], 16) * 0.114) < 128;
@@ -130,6 +136,136 @@
         return { a: a, x0: x0, x1: x1, y0: y0, y1: y1 };
       });
     }).catch(function () { st.coast = []; });
+  }
+
+  // ------------------------------------------------- IR and vorticity data
+  function loadEnvIndex() {
+    if (!ENV_BASE) return Promise.resolve();
+    return fetch(ENV_BASE + 'index.json', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : { cases: {} }; })
+      .then(function (ix) { st.envIndex = ix.cases || {}; })
+      .catch(function () { st.envIndex = st.envIndex || {}; });
+  }
+  function hasEnv(id) { var c = st.envIndex && st.envIndex[id]; return !!(ENV_BASE && c && !c.error && c.frames); }
+  function int8From(b64) {
+    var bin = atob(b64), a = new Int8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+    return a;
+  }
+  function prepareEnv(doc) {
+    var ir = doc.ir, v = doc.vort, ks = doc.ccf.thresholds, best = ks[0];
+    ks.forEach(function (k) { if (Math.abs(k - CCF_K) < Math.abs(best - CCF_K)) best = k; });
+    var lut = new Uint8ClampedArray(256);
+    for (var b = 0; b < 256; b++) lut[b] = 255 * (IR_GRAY[0] - (ir.tb_max - b * ir.tb_step)) / (IR_GRAY[0] - IR_GRAY[1]);
+    var cv = document.createElement('canvas');
+    cv.width = cv.height = ir.px;
+    return {
+      doc: doc, t: ir.t, px: ir.px, half: ir.half_km, sheets: {}, lut: lut, cv: cv, cvFrame: -1, frame: null,
+      ccfK: best, ccf: doc.ccf.frac[String(best)],
+      vn: v.px, vres: v.res_km, vhalf: v.half_km, vscale: v.unit / 1e-5,
+      low: v.low ? int8From(v.low) : null, mid: v.mid ? int8From(v.mid) : null, anyVort: v.have.some(function (h) { return h; })
+    };
+  }
+  function loadEnv(id) {
+    st.E = null;
+    if (!hasEnv(id)) return Promise.resolve();
+    return fetch(ENV_BASE + id + '.json', { cache: 'no-cache' })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(function (doc) { if (st.id === id) st.E = prepareEnv(doc); })
+      .catch(function () { if (st.id === id) st.E = null; });
+  }
+  function decodeGray(blob) {
+    var typed = new Blob([blob], { type: 'image/webp' });
+    var got = window.createImageBitmap
+      ? createImageBitmap(typed, { colorSpaceConversion: 'none' })
+      : new Promise(function (res, rej) { var img = new Image(), u = URL.createObjectURL(typed); img.onload = function () { URL.revokeObjectURL(u); res(img); }; img.onerror = rej; img.src = u; });
+    return got.then(function (bmp) {
+      var c = document.createElement('canvas');
+      c.width = bmp.width; c.height = bmp.height;
+      var x = c.getContext('2d', { willReadFrequently: true });
+      x.drawImage(bmp, 0, 0);
+      var d = x.getImageData(0, 0, c.width, c.height).data, g = new Uint8Array(c.width * c.height);
+      for (var i = 0, j = 0; i < g.length; i++, j += 4) g[i] = d[j];
+      return { gray: g, w: c.width };
+    });
+  }
+  function sheetFor(E, fi) {       // the decoded sheet holding frame fi, or null while it loads
+    var si = Math.floor(fi / E.doc.ir.per_sheet), sh = E.sheets[si];
+    if (!sh) {
+      sh = E.sheets[si] = { gray: null, failed: false };
+      fetch(ENV_BASE + E.doc.ir.sheets[si])
+        .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
+        .then(decodeGray)
+        .then(function (g) { sh.gray = g.gray; sh.w = g.w; if (st.E === E) drawIR(); })
+        .catch(function () { sh.failed = true; if (st.E === E) drawIR(); });
+    }
+    return sh;
+  }
+  function frameAt(E, t) { return lowerBound(E.t, t + 1) - 1; }       // last scan that started at or before t
+  function frameBytes(E, fi) {     // the px*px stored bytes of one frame, once its sheet is in
+    if (E.frame && E.frame.i === fi) return E.frame.a;
+    var sh = sheetFor(E, fi);
+    if (!sh.gray) return sh.failed ? false : null;
+    var ir = E.doc.ir, px = E.px, k = fi % ir.per_sheet, x0 = (k % ir.cols) * px, y0 = Math.floor(k / ir.cols) * px, a = new Uint8Array(px * px);
+    for (var r = 0; r < px; r++) a.set(sh.gray.subarray((y0 + r) * sh.w + x0, (y0 + r) * sh.w + x0 + px), r * px);
+    E.frame = { i: fi, a: a };
+    return a;
+  }
+  function vortHour(E, t) {        // index of the latest ERA5 hour at or before t, or -1
+    var v = E.doc.vort, i = Math.min(v.n - 1, Math.floor((t - v.t0) / v.dt));
+    return i >= 0 && v.have[i] ? i : -1;
+  }
+  function vortAt(E, grid, hi, x, y) {   // bilinear value (1e-5 s-1) at x km east, y km north
+    var n = E.vn, fc = (x + E.vhalf) / E.vres, fr = (E.vhalf - y) / E.vres;
+    if (fc < 0 || fr < 0 || fc > n - 1 || fr > n - 1) return null;
+    var c = Math.min(n - 2, Math.floor(fc)), r = Math.min(n - 2, Math.floor(fr)), a = fc - c, b = fr - r, o = hi * n * n + r * n + c;
+    return E.vscale * (grid[o] * (1 - a) * (1 - b) + grid[o + 1] * a * (1 - b) + grid[o + n] * (1 - a) * b + grid[o + n + 1] * a * b);
+  }
+  function offsetKm(clat, clon, lat, lon) {      // east/north offset along the great circle, as the pipeline computes it
+    var R = 6372.8, d2r = Math.PI / 180, p1 = clat * d2r, p2 = lat * d2r, dl = (lon - clon) * d2r;
+    var a = Math.pow(Math.sin((p2 - p1) / 2), 2) + Math.cos(p1) * Math.cos(p2) * Math.pow(Math.sin(dl / 2), 2);
+    var dist = 2 * R * Math.asin(Math.sqrt(a)), brg = Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl));
+    return [dist * Math.sin(brg), dist * Math.cos(brg)];
+  }
+  // Contour lines of a square grid at one level, joined into polylines so dashes run evenly.
+  function contours(grid, off, n, scale, level) {
+    var segs = [], r, c;
+    function cross(r0, c0, r1, c1) {
+      var a = grid[off + r0 * n + c0] * scale, b = grid[off + r1 * n + c1] * scale, f = (level - a) / (b - a);
+      return [c0 + (c1 - c0) * f, r0 + (r1 - r0) * f];
+    }
+    for (r = 0; r < n - 1; r++) for (c = 0; c < n - 1; c++) {
+      var tl = grid[off + r * n + c] * scale >= level, tr = grid[off + r * n + c + 1] * scale >= level;
+      var br = grid[off + (r + 1) * n + c + 1] * scale >= level, bl = grid[off + (r + 1) * n + c] * scale >= level;
+      var code = (tl ? 8 : 0) | (tr ? 4 : 0) | (br ? 2 : 0) | (bl ? 1 : 0);
+      if (code === 0 || code === 15) continue;
+      var T = function () { return cross(r, c, r, c + 1); }, Rt = function () { return cross(r, c + 1, r + 1, c + 1); };
+      var B = function () { return cross(r + 1, c, r + 1, c + 1); }, L = function () { return cross(r, c, r + 1, c); };
+      switch (code) {
+        case 1: case 14: segs.push([L(), B()]); break;
+        case 2: case 13: segs.push([B(), Rt()]); break;
+        case 3: case 12: segs.push([L(), Rt()]); break;
+        case 4: case 11: segs.push([T(), Rt()]); break;
+        case 6: case 9: segs.push([T(), B()]); break;
+        case 7: case 8: segs.push([L(), T()]); break;
+        case 5: segs.push([L(), T()]); segs.push([B(), Rt()]); break;
+        case 10: segs.push([L(), B()]); segs.push([T(), Rt()]); break;
+      }
+    }
+    var key = function (p) { return Math.round(p[0] * 1000) + ',' + Math.round(p[1] * 1000); }, ends = {}, used = new Uint8Array(segs.length), lines = [];
+    segs.forEach(function (s, i) { [0, 1].forEach(function (e) { var k = key(s[e]); (ends[k] = ends[k] || []).push(i); }); });
+    function grow(line, atEnd) {
+      for (;;) {
+        var p = atEnd ? line[line.length - 1] : line[0], next = -1;
+        (ends[key(p)] || []).forEach(function (i) { if (!used[i]) next = i; });
+        if (next < 0) return;
+        used[next] = 1;
+        var s = segs[next], q = key(s[0]) === key(p) ? s[1] : s[0];
+        if (atEnd) line.push(q); else line.unshift(q);
+      }
+    }
+    segs.forEach(function (s, i) { if (used[i]) return; used[i] = 1; var line = [s[0], s[1]]; grow(line, true); grow(line, false); lines.push(line); });
+    return lines;
   }
 
   function prepare(p) {
@@ -240,15 +376,21 @@
     return getJSON('storms/' + id + '.json').then(function (p) {
       if (st.id !== id) return;
       var wasEnd = st.S && st.cursor >= st.S.ns;
+      var sameEnv = keepView && st.E && st.E.doc.id === id;
       st.S = prepare(p);
       if (!keepView || wasEnd) st.cursor = st.S.ns;
       st.cursor = Math.max(1, Math.min(st.S.ns, st.cursor));
       st.hover = -1;
       $('detail').hidden = false;
       $('cursor').max = st.S.ns;
+      var env = hasEnv(id) && p.status !== 'active';
+      $('ir-panel').hidden = !env;
+      $('panels').classList.toggle('three', env);
+      if (!sameEnv) st.E = null;
       renderHeadline();
       renderMethod();
       renderAll();
+      if (env && !sameEnv) loadEnv(id).then(function () { if (st.id === id) { renderMethod(); renderAll(); } });
     }).catch(function (err) {
       $('detail').hidden = true;
       showEmpty('Could not load this record', String(err.message || err));
@@ -290,6 +432,18 @@
       (info.cells_near_land ? ' (' + info.cells_near_land + ' such cells in this record).' : '.') +
       (S.p.steps.extrap_from >= 0 ? ' After the latest fix the center is extrapolated with the recent motion, so the newest hours can shift when the next fix arrives.' : '') +
       (S.genesis ? ' Genesis here is the first tropical-storm record in the best track.' : '')));
+    if (st.E) {
+      var v = st.E.doc.vort, lv = v.levels || {};
+      box.appendChild(el('p', null,
+        'The infrared image is GOES ABI channel 13 brightness temperature from every full-disk scan, resampled to ' + st.E.doc.ir.res_km +
+        ' km around the center; pixels flagged as bad are left black. Cold cloud fraction is the share of pixels within ' + st.E.doc.ccf.radius_km +
+        ' km at or below ' + st.E.ccfK + ' K. Vorticity is hourly ERA5 relative vorticity averaged over the pressure levels from ' +
+        v.layers.low[0] + ' to ' + v.layers.low[1] + ' hPa (low level' + (lv.low ? ', ' + lv.low.length + ' levels' : '') + ') and from ' +
+        v.layers.mid[0] + ' to ' + v.layers.mid[1] + ' hPa (mid level' + (lv.mid ? ', ' + lv.mid.length + ' levels' : '') +
+        '); the time series is its mean within ' + v.radius_km + ' km of the center, weighted by the cosine of latitude.' +
+        (st.E.anyVort && v.have.indexOf(0) >= 0 ? ' ERA5 is not available for part of this record.' : '') +
+        (!st.E.anyVort ? ' ERA5 has not been published for this period yet, so there are no vorticity contours.' : '')));
+    }
   }
 
   // ------------------------------------------------------------------ tiles
@@ -435,6 +589,165 @@
     }
   }
 
+  // ---------------------------------------------------------------- IR panel
+  function cased(ctx, color, width, dash, draw) {       // a line that stays readable on both dark sea and white cloud
+    ctx.setLineDash(dash || []);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(8, 10, 14, 0.62)'; ctx.lineWidth = width + 2; ctx.beginPath(); draw(); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath(); draw(); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  function drawIR() {
+    var S = st.S, E = st.E, C = st.C;
+    if (!S || $('ir-panel').hidden) return;
+    var f = fitCanvas($('ir')), ctx = f.ctx, w = f.w, h = f.h;
+    var half = E ? E.half : 384, m = { l: 34, r: 8, t: 8, b: 22 }, side = Math.min(w - m.l - m.r, h - m.t - m.b);
+    var ox = m.l + (w - m.l - m.r - side) / 2, oy = m.t, s = side / (2 * half);
+    var X = function (km) { return ox + side / 2 + km * s; }, Y = function (km) { return oy + side / 2 - km * s; };
+    st.irGeom = { ox: ox, oy: oy, side: side, s: s, half: half, fi: -1, hi: -1 };
+    var tc = S.t0 + st.cursor * S.dt, msg = '', sub = '';
+    ctx.fillStyle = '#0b0d10'; ctx.fillRect(ox, oy, side, side);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(ox, oy, side, side); ctx.clip();
+    var fi = E ? frameAt(E, tc) : -1, hi = E ? vortHour(E, tc) : -1, tf = fi >= 0 ? E.t[fi] : tc;
+    if (!E) msg = 'Loading';
+    else if (fi < 0 || tc - E.t[fi] > 1500) { msg = 'No scan at this time'; fi = -1; }
+    else {
+      var bytes = frameBytes(E, fi);
+      if (bytes === null) msg = 'Loading image';
+      else if (bytes === false) { msg = 'Image could not be loaded'; fi = -1; }
+      else {
+        if (E.cvFrame !== fi) {
+          var ictx = E.cv.getContext('2d'), img = ictx.createImageData(E.px, E.px), d = img.data;
+          for (var i = 0, j = 0; i < bytes.length; i++, j += 4) { d[j] = d[j + 1] = d[j + 2] = E.lut[bytes[i]]; d[j + 3] = 255; }
+          ictx.putImageData(img, 0, 0);
+          E.cvFrame = fi;
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(E.cv, ox, oy, side, side);
+        st.irGeom.fi = fi;
+      }
+    }
+    // coastline, placed for the center at the scan time
+    var c = stepCentre(S, Math.round((tf - S.t0) / S.dt)), clat = c[0], clon = c[1];
+    if (st.coast && clat != null) {
+      var dLat = half * 1.45 / 111.19 + 0.2, dLon = dLat / Math.max(0.2, Math.cos(clat * Math.PI / 180));
+      cased(ctx, 'rgba(255, 255, 255, 0.82)', 0.9, null, function () {
+        st.coast.forEach(function (ring) {
+          if (ring.x1 < clon - dLon || ring.x0 > clon + dLon || ring.y1 < clat - dLat || ring.y0 > clat + dLat) return;
+          var pen = false;
+          for (var i = 0; i < ring.a.length; i += 2) {
+            var la = ring.a[i + 1], lo = ring.a[i];
+            if (Math.abs(la - clat) > dLat || Math.abs(lo - clon) > dLon) { pen = false; continue; }
+            var o = offsetKm(clat, clon, la, lo);
+            if (pen) ctx.lineTo(X(o[0]), Y(o[1])); else ctx.moveTo(X(o[0]), Y(o[1]));
+            pen = true;
+          }
+        });
+      });
+    }
+    // the radius the time series are taken over
+    var R = S.p.method.radius_km;
+    cased(ctx, 'rgba(255, 255, 255, 0.9)', 1, [2, 4], function () { ctx.arc(X(0), Y(0), R * s, 0, 2 * Math.PI); });
+    // vorticity contours: low level solid, mid level dashed
+    if (E && hi >= 0) {
+      st.irGeom.hi = hi;
+      [['low', C['vort-low'], null], ['mid', C['vort-mid'], [7, 4]]].forEach(function (layer) {
+        var grid = E[layer[0]];
+        if (!grid) return;
+        VORT_LEVELS.forEach(function (level, li) {
+          var lines = contours(grid, hi * E.vn * E.vn, E.vn, E.vscale, level);
+          if (!lines.length) return;
+          cased(ctx, layer[1], 1.5 + 0.4 * li, layer[2], function () {
+            lines.forEach(function (line) {
+              line.forEach(function (p, k) {
+                var px = X(-E.vhalf + p[0] * E.vres), py = Y(E.vhalf - p[1] * E.vres);
+                if (k) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+              });
+            });
+          });
+        });
+      });
+    }
+    // lightning features in the selected window
+    if (st.irLightning && fi >= 0) {
+      var r = windowRange(S), wsteps = windowSteps(S);
+      for (var q = r[0]; q < r[1]; q++) {
+        if (!shown(S, q)) continue;
+        ctx.globalAlpha = 0.35 + 0.65 * (1 - (st.cursor - 1 - S.k[q]) / Math.max(1, wsteps));
+        ctx.beginPath(); ctx.arc(X(S.x[q]), Y(S.y[q]), 2.4, 0, 2 * Math.PI);
+        ctx.fillStyle = C.data; ctx.fill(); ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'; ctx.lineWidth = 0.8; ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    cased(ctx, '#ffffff', 1.4, null, function () { ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); });
+    ctx.font = '11px ' + C.mono; ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
+    var a45 = Math.PI / 4, lx = X(R * Math.cos(a45)) + 4, ly = Y(R * Math.sin(a45)) - 2;
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(8, 10, 14, 0.7)'; ctx.strokeText(R + ' km', lx, ly);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(R + ' km', lx, ly);
+    if (msg) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '13px ' + C.mono;
+      ctx.lineWidth = 3; ctx.strokeText(msg, X(0), Y(half * 0.62)); ctx.fillText(msg, X(0), Y(half * 0.62));
+    }
+    ctx.restore();
+    ctx.strokeStyle = C.axis; ctx.lineWidth = 1; ctx.strokeRect(ox + 0.5, oy + 0.5, side - 1, side - 1);
+    ctx.fillStyle = C.muted; ctx.font = '11px ' + C.mono;
+    [-300, -150, 0, 150, 300].forEach(function (v) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(v, X(v), oy + side + 5);
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(v, ox - 5, Y(v));
+    });
+    if (E && fi >= 0) sub = 'scan ' + fmtTime(E.t[fi]) + ', GOES-' + E.doc.ir.sat[fi] + (hi >= 0 ? '; ERA5 ' + pad(new Date((E.doc.vort.t0 + hi * 3600) * 1000).getUTCHours()) + 'Z' : '; no ERA5 for this hour');
+    $('ir-sub').textContent = sub || 'channel 13 brightness temperature';
+  }
+  function renderIRLegend() {
+    var E = st.E, box = clear($('ir-legend'));
+    if ($('ir-panel').hidden) return;
+    var item = el('span', { 'class': 'item' });
+    item.appendChild(el('span', null, 'Brightness temp. (K)'));
+    var rb = el('span', { 'class': 'rampbox' }), bar = el('span', { 'class': 'ramp' }), ticks = el('span', { 'class': 'ticks' });
+    bar.style.background = 'linear-gradient(to right, #000, #fff)';
+    bar.style.outline = '1px solid var(--line)';
+    [IR_GRAY[0], (IR_GRAY[0] + IR_GRAY[1]) / 2, IR_GRAY[1]].forEach(function (t) { ticks.appendChild(el('span', null, String(t))); });
+    rb.appendChild(bar); rb.appendChild(ticks); item.appendChild(rb); box.appendChild(item);
+    if (E && E.anyVort) {
+      var layers = E.doc.vort.layers;
+      [['vort-low', layers.low, null], ['vort-mid', layers.mid, '7 4']].forEach(function (k) {
+        var it = el('span', { 'class': 'item' }), svg = el('svg', { width: 30, height: 10, 'aria-hidden': 'true' });
+        var ln = el('line', { x1: 1, x2: 29, y1: 5, y2: 5, stroke: 'var(--' + k[0] + ')', 'stroke-width': 2.5 });
+        if (k[2]) ln.setAttribute('stroke-dasharray', k[2]);
+        svg.appendChild(ln); it.appendChild(svg);
+        it.appendChild(el('span', null, k[1][0] + '–' + k[1][1] + ' hPa vorticity'));
+        box.appendChild(it);
+      });
+      box.appendChild(el('span', { 'class': 'key' }, 'contours ' + VORT_LEVELS.join(', ') + ' ×10⁻⁵ s⁻¹'));
+    } else if (E) {
+      box.appendChild(el('span', { 'class': 'key' }, 'ERA5 vorticity is not published for this period yet'));
+    }
+    var lab = el('label', { 'class': 'check' }), cb = el('input', { type: 'checkbox' });
+    cb.checked = st.irLightning;
+    cb.addEventListener('change', function () { st.irLightning = cb.checked; drawIR(); });
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(' Lightning features'));
+    box.appendChild(lab);
+  }
+  function hoverIR(evt) {
+    var S = st.S, E = st.E, G = st.irGeom;
+    if (!S || !E || !G) return;
+    var box = $('ir').getBoundingClientRect(), mx = evt.clientX - box.left, my = evt.clientY - box.top;
+    var x = (mx - G.ox - G.side / 2) / G.s, y = (G.oy + G.side / 2 - my) / G.s;
+    if (Math.abs(x) > G.half || Math.abs(y) > G.half) { hideTip(); return; }
+    var rows = [];
+    if (G.fi >= 0 && E.frame && E.frame.i === G.fi) {
+      var col = Math.min(E.px - 1, Math.floor((x + G.half) / (2 * G.half) * E.px)), row = Math.min(E.px - 1, Math.floor((G.half - y) / (2 * G.half) * E.px));
+      var b = E.frame.a[row * E.px + col];
+      rows.push(['Brightness temp.', b < 2 ? 'no data' : Math.round(E.doc.ir.tb_max - b * E.doc.ir.tb_step) + ' K']);
+    }
+    if (G.hi >= 0) {
+      var lo = vortAt(E, E.low, G.hi, x, y), mi = vortAt(E, E.mid, G.hi, x, y);
+      if (lo != null) { rows.push(['Low-level vorticity', lo.toFixed(1) + ' ×10⁻⁵ s⁻¹']); rows.push(['Mid-level vorticity', mi.toFixed(1) + ' ×10⁻⁵ s⁻¹']); }
+    }
+    showTip(evt, Math.abs(Math.round(x)) + ' km ' + (x >= 0 ? 'east' : 'west') + ', ' + Math.abs(Math.round(y)) + ' km ' + (y >= 0 ? 'north' : 'south') + ' of center', rows);
+  }
+
   // ------------------------------------------------------ area-energy panel
   function drawDist() {
     var S = st.S, C = st.C, f = fitCanvas($('dist')), ctx = f.ctx, w = f.w, h = f.h;
@@ -551,15 +864,38 @@
     { key: 'energy', title: 'Group energy (fJ): median and middle 50%', kind: 'band' }
   ];
 
+  // Archived cases add two rows from the IR and ERA5 data: neither is a lightning quantity, so
+  // they are drawn at their own time resolution (hourly, and every scan) instead of in bins.
+  var ENV_ROWS = [
+    { key: 'vort', title: 'Vorticity within 200 km (10⁻⁵ s⁻¹), ERA5', kind: 'vort' },
+    { key: 'ccf', title: 'Cold cloud fraction within 200 km (%)', kind: 'ccf' }
+  ];
+  function meanOf(a) { var n = 0, sum = 0; a.forEach(function (v) { if (v != null) { n++; sum += v; } }); return n ? sum / n : null; }
+  function envBin(E, ta, tb) {      // means of the environment series over a time bin
+    var v = E.doc.vort, low = [], mid = [], ccf = [], i;
+    for (i = 0; i < v.n; i++) { var th = v.t0 + i * v.dt; if (th >= ta && th < tb && v.have[i]) { low.push(v.mean_low[i]); mid.push(v.mean_mid[i]); } }
+    if (!low.length) { i = vortHour(E, ta); if (i >= 0) { low.push(v.mean_low[i]); mid.push(v.mean_mid[i]); } }
+    for (i = lowerBound(E.t, ta); i < E.t.length && E.t[i] < tb; i++) ccf.push(E.ccf[i]);
+    var c = meanOf(ccf);
+    return { low: meanOf(low), mid: meanOf(mid), ccf: c == null ? null : 100 * c };
+  }
+  function linePaths(points) {      // SVG path data for a series with gaps (null y)
+    var out = [], cur = [];
+    points.forEach(function (p) { if (p[1] == null) { if (cur.length) out.push(cur); cur = []; } else cur.push(p[0].toFixed(1) + ',' + p[1].toFixed(1)); });
+    if (cur.length) out.push(cur);
+    return out;
+  }
+
   function renderTS() {
     var S = st.S, svg = clear($('ts')), W = Math.max(300, Math.round($('ts-wrap').getBoundingClientRect().width));
+    var E = st.E && !$('ir-panel').hidden ? st.E : null, ROWS = TS_ROWS.concat(E ? ENV_ROWS : []);
     var m = { l: 46, r: 14, t: S.genesis ? 26 : 10 }, rowH = 78, gap = 26, pw = W - m.l - m.r;
     var bins = binSeries(S), tA = S.t0, tB = S.t0 + S.ns * S.dt;
     var X = function (t) { return m.l + (t - tA) / (tB - tA) * pw; }, XK = function (k) { return X(S.t0 + k * S.dt); };
-    var qualityY = m.t + TS_ROWS.length * (rowH + gap) + 12, H = qualityY + 46;
+    var qualityY = m.t + ROWS.length * (rowH + gap) + 12, H = qualityY + 46;
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     svg.setAttribute('height', H);
-    st.tsGeom = { X: X, XK: XK, m: m, pw: pw, bins: bins, top: m.t, bottom: qualityY + 8, W: W, H: H };
+    st.tsGeom = { X: X, XK: XK, m: m, pw: pw, bins: bins, top: m.t, bottom: qualityY + 8, W: W, H: H, E: E };
 
     var defs = el('defs'), pat = el('pattern', { id: 'pend', width: 5, height: 5, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' });
     pat.appendChild(el('rect', { width: 5, height: 5, fill: 'var(--panel)' }));
@@ -572,11 +908,56 @@
     var span = (tB - tA) / 3600, stepH = span > 150 ? 24 : (span > 60 || pw < 520) ? (pw < 420 && span > 60 ? 24 : 12) : 6, ticks = [], t;
     for (t = Math.ceil(tA / (stepH * 3600)) * stepH * 3600; t <= tB; t += stepH * 3600) ticks.push(t);
 
-    TS_ROWS.forEach(function (row, ri) {
+    ROWS.forEach(function (row, ri) {
       var y0 = m.t + ri * (rowH + gap) + 16, y1 = y0 + rowH, g = el('g');
-      g.appendChild(el('text', { x: m.l, y: y0 - 6, fill: 'var(--ink-2)', 'font-size': 11.5, style: 'font-family:var(--sans)' }, row.title));
+      var title = row.kind === 'ccf' ? row.title + ': channel 13 at or below ' + E.ccfK + ' K' : row.title;
+      g.appendChild(el('text', { x: m.l, y: y0 - 6, fill: 'var(--ink-2)', 'font-size': 11.5, style: 'font-family:var(--sans)' }, title));
       ticks.forEach(function (tk) { g.appendChild(el('line', { x1: X(tk), x2: X(tk), y1: y0, y2: y1, stroke: 'var(--grid)' })); });
       var yOf, yTicks;
+      if (row.kind === 'vort' || row.kind === 'ccf') {
+        var clipX = function (t) { return Math.max(m.l, Math.min(m.l + pw, X(t))); }, series, vd = E.doc.vort, lo = 0, hi = 1;
+        if (row.kind === 'vort') {
+          series = [['var(--vort-low)', null, vd.mean_low, vd.layers.low], ['var(--vort-mid)', '6 4', vd.mean_mid, vd.layers.mid]].map(function (sr) {
+            return { color: sr[0], dash: sr[1], label: sr[3][0] + '–' + sr[3][1] + ' hPa', pts: sr[2].map(function (v, i) { return [vd.t0 + i * vd.dt, v]; }) };
+          });
+        } else {
+          series = [{ color: 'var(--ink-2)', dash: null, pts: E.ccf.map(function (v, i) { return [E.t[i], v == null ? null : 100 * v]; }) }];
+        }
+        series.forEach(function (sr) { sr.pts.forEach(function (p) { if (p[1] != null) { lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); } }); });
+        hi = row.kind === 'ccf' ? Math.min(100, nice125(hi, true)) : nice125(hi, true);
+        lo = lo < 0 ? -nice125(-lo, true) : 0;
+        yOf = function (v) { return y1 - (v - lo) / (hi - lo) * rowH; };
+        yTicks = lo < 0 ? [lo, 0, hi] : [0, hi / 2, hi];
+        yTicks.forEach(function (v) {
+          g.appendChild(el('line', { x1: m.l, x2: m.l + pw, y1: yOf(v), y2: yOf(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)' }));
+          g.appendChild(el('text', { x: m.l - 6, y: yOf(v) + 3.5, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10.5 }, tickText(+v.toPrecision(3))));
+        });
+        var any = false;
+        series.forEach(function (sr) {
+          linePaths(sr.pts.filter(function (p) { return p[0] >= tA - 1 && p[0] <= tB + 1; }).map(function (p) { return [clipX(p[0]), p[1] == null ? null : yOf(p[1])]; })).forEach(function (seg) {
+            any = true;
+            if (seg.length === 1) { var xy = seg[0].split(','); g.appendChild(el('circle', { cx: xy[0], cy: xy[1], r: 2.5, fill: sr.color })); return; }
+            var path = el('path', { d: 'M' + seg.join('L'), fill: 'none', stroke: sr.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': sr.dash ? 'butt' : 'round' });
+            if (sr.dash) path.setAttribute('stroke-dasharray', sr.dash);
+            g.appendChild(path);
+          });
+        });
+        if (row.kind === 'vort') {          // legend for the two layers, at the right of the row title
+          var lx = m.l + pw;
+          series.slice().reverse().forEach(function (sr) {
+            var wLab = sr.label.length * 6.3;
+            g.appendChild(el('text', { x: lx, y: y0 - 6, 'text-anchor': 'end', fill: 'var(--ink-2)', 'font-size': 10.5 }, sr.label));
+            var key = el('line', { x1: lx - wLab - 30, x2: lx - wLab - 6, y1: y0 - 10, y2: y0 - 10, stroke: sr.color, 'stroke-width': 2 });
+            if (sr.dash) key.setAttribute('stroke-dasharray', sr.dash);
+            g.appendChild(key);
+            lx -= wLab + 44;
+          });
+        }
+        if (!any) g.appendChild(el('text', { x: m.l + pw / 2, y: (y0 + y1) / 2 + 4, 'text-anchor': 'middle', fill: 'var(--muted)', 'font-size': 11, style: 'font-family:var(--sans)' },
+          row.kind === 'vort' ? 'ERA5 is not published for this period yet' : 'no usable scans'));
+        svg.appendChild(g);
+        return;
+      }
       if (row.kind === 'bar') {
         var max = Math.max.apply(null, bins.map(function (b) { return b[row.key]; }).concat([1])), top = nice125(max, true);
         yOf = function (v) { return y1 - v / top * rowH; };
@@ -681,13 +1062,18 @@
   }
 
   function renderTable(bins) {
-    var S = st.S, table = clear($('ts-table')), head = el('tr');
-    ['Bin start (UTC)', 'Groups', 'Features', 'Area p25', 'Area median', 'Area p75', 'Energy p25', 'Energy median', 'Energy p75', 'GLM coverage'].forEach(function (h) { head.appendChild(el('th', null, h)); });
+    var S = st.S, table = clear($('ts-table')), head = el('tr'), E = st.tsGeom && st.tsGeom.E;
+    ['Bin start (UTC)', 'Groups', 'Features', 'Area p25', 'Area median', 'Area p75', 'Energy p25', 'Energy median', 'Energy p75', 'GLM coverage']
+      .concat(E ? ['Low-level vorticity', 'Mid-level vorticity', 'Cold cloud ≤ ' + E.ccfK + ' K'] : []).forEach(function (h) { head.appendChild(el('th', null, h)); });
     table.appendChild(head);
     bins.forEach(function (b) {
-      var tr = el('tr'), a = b.areaQ || [NaN, NaN, NaN], e = b.energyQ || [NaN, NaN, NaN];
+      var tr = el('tr'), a = b.areaQ || [NaN, NaN, NaN], e = b.energyQ || [NaN, NaN, NaN], extra = [];
+      if (E) {
+        var eb = envBin(E, S.t0 + b.k0 * S.dt, S.t0 + b.k1 * S.dt);
+        extra = [eb.low == null ? '–' : eb.low.toFixed(2), eb.mid == null ? '–' : eb.mid.toFixed(2), eb.ccf == null ? '–' : eb.ccf.toFixed(1) + '%'];
+      }
       [fmtTime(S.t0 + b.k0 * S.dt, true), fmtInt(b.groups), fmtInt(b.feats), fmtVal(a[0]), fmtVal(a[1]), fmtVal(a[2]), fmtVal(e[0]), fmtVal(e[1]), fmtVal(e[2]), Math.round(b.cover * 100) + '%']
-        .forEach(function (v) { tr.appendChild(el('td', null, v)); });
+        .concat(extra).forEach(function (v) { tr.appendChild(el('td', null, v)); });
       table.appendChild(tr);
     });
   }
@@ -797,6 +1183,11 @@
       ['Energy', e ? fmtVal(e[1]) + ' fJ (' + fmtVal(e[0]) + '–' + fmtVal(e[2]) + ')' : '–'],
       ['GLM coverage', Math.round(bin.cover * 100) + '%' + (bin.partial ? ', partial bin' : '')]
     ];
+    if (G.E) {
+      var eb = envBin(G.E, t0, t0 + st.bin * S.dt);
+      rows.push(['Vorticity, low / mid', (eb.low == null ? '–' : eb.low.toFixed(1)) + ' / ' + (eb.mid == null ? '–' : eb.mid.toFixed(1)) + ' ×10⁻⁵ s⁻¹']);
+      rows.push(['Cold cloud ≤ ' + G.E.ccfK + ' K', eb.ccf == null ? '–' : eb.ccf.toFixed(1) + '%']);
+    }
     if (S.genesis) rows.unshift(['Before genesis', ((S.genesis - t0) / 3600).toFixed(1) + ' h']);
     showTip(evt, fmtTime(t0) + ' to ' + fmtTime(t0 + st.bin * S.dt), rows);
   }
@@ -820,12 +1211,12 @@
     if (!st.S) return;
     st.cursor = Math.max(1, Math.min(st.S.ns, k));
     st.hover = -1;
-    cursorText(); renderTiles(); drawMap(); drawDist(); renderTSCursor(); moveTrackMarker();
+    cursorText(); renderTiles(); drawMap(); drawIR(); drawDist(); renderTSCursor(); moveTrackMarker();
   }
   function renderAll() {
     if (!st.S) return;
     readColors();
-    cursorText(); renderTiles(); renderMapLegend(); drawMap(); drawDist(); renderTS(); moveTrackMarker();
+    cursorText(); renderTiles(); renderMapLegend(); drawMap(); renderIRLegend(); drawIR(); drawDist(); renderTS(); moveTrackMarker();
   }
   var playTimer = null;
   function stopPlay() { st.playing = false; if (playTimer) clearInterval(playTimer); playTimer = null; $('play').textContent = 'Play'; $('play').setAttribute('aria-label', 'Play'); }
@@ -899,6 +1290,8 @@
       $(id).addEventListener('pointermove', function (e) { hoverCanvas(e, id); });
       $(id).addEventListener('pointerleave', function () { hideTip(); if (st.hover >= 0) { st.hover = -1; drawMap(); drawDist(); } });
     });
+    $('ir').addEventListener('pointermove', hoverIR);
+    $('ir').addEventListener('pointerleave', hideTip);
     var dragging = false, ts = $('ts');
     ts.addEventListener('pointerdown', function (e) { dragging = true; stopPlay(); try { ts.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } tsPointer(e, true); });
     ts.addEventListener('pointermove', function (e) { tsPointer(e, dragging); });
@@ -910,14 +1303,14 @@
     if (window.MutationObserver) new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(redraw);
 
-    loadCoast().then(function () { return loadIndex(true); }).catch(function (err) {
+    loadCoast().then(loadEnvIndex).then(function () { return loadIndex(true); }).catch(function (err) {
       if (window.console) console.warn('Pre-Genesis Lightning Monitor: ' + (err && err.message || err));
       $('detail').hidden = true;
       showEmpty('No data has been published yet',
         'This page fills in after the first real-time update or archive run publishes its data.',
         DEMO || EMBED ? null : ['?demo=1', 'Open the page with synthetic example data']);
     });
-    if (!EMBED) setInterval(function () { loadIndex(false).catch(function () { /* keep the current view */ }); }, REFRESH_MS);
+    if (!EMBED) setInterval(function () { loadEnvIndex().then(function () { return loadIndex(false); }).catch(function () { /* keep the current view */ }); }, REFRESH_MS);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

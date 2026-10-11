@@ -8,3 +8,5 @@ scipy==1.17.1
 scikit-image==0.26.0
 trackpy==0.7
 requests==2.34.2
+h5py==3.16.0           # range reads of ABI and ERA5 files (pipeline/remote.py)
+pillow==12.3.0         # IR image sheets

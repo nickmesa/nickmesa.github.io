@@ -42,3 +42,26 @@ def lattice_index(lat, lon, res):
 
 def lattice_latlon(gi, gj, res):
     return np.asarray(gi) * res - 90.0, np.asarray(gj) * res - 180.0
+
+
+def destination(clat, clon, x_km, y_km):
+    """Latitude and longitude of points x_km east and y_km north of a centre.
+
+    The inverse of offsets_km(): range is measured along the great circle and
+    x/y give its compass direction, so an image built with this lines up with
+    feature offsets from offsets_km().
+    """
+    x, y = np.asarray(x_km, dtype=np.float64), np.asarray(y_km, dtype=np.float64)
+    d = np.hypot(x, y) / EARTH_RADIUS_KM
+    brg = np.arctan2(x, y)
+    lat1, lon1 = np.radians(clat), np.radians(clon)
+    lat2 = np.arcsin(np.sin(lat1) * np.cos(d) + np.cos(lat1) * np.sin(d) * np.cos(brg))
+    lon2 = lon1 + np.arctan2(np.sin(brg) * np.sin(d) * np.cos(lat1), np.cos(d) - np.sin(lat1) * np.sin(lat2))
+    return np.degrees(lat2), (np.degrees(lon2) + 540.0) % 360.0 - 180.0
+
+
+def centred_grid(half_km, res_km):
+    """x (east) and y (north) of pixel centres for a square image; row 0 is the northern edge."""
+    n = int(round(2 * half_km / res_km))
+    edge = (np.arange(n) + 0.5) * res_km - half_km
+    return np.meshgrid(edge, -edge)
