@@ -17,7 +17,25 @@
   var ENV_BASE = EMBED ? null : (DEMO ? 'demo/env/' : (window.GLM_ENV_BASE || null));
   var CCF_K = window.GLM_CCF_K || 208;                         // cold cloud threshold (K); see config.CCF_THRESHOLDS_K
   var VORT_LEVELS = window.GLM_VORT_LEVELS || [5, 10, 20, 40]; // contours, 1e-5 s-1
-  var IR_GRAY = [310, 190];                                    // brightness temperatures drawn as black and as white
+  // Enhanced infrared color scale of the kind used on tropical weather sites: gray for warm
+  // surfaces and low cloud, then blue, green, yellow, orange and red toward colder cloud tops.
+  // [brightness temperature in deg C, red, green, blue], warm to cold; colors between are blended.
+  var IR_COLORS = window.GLM_IR_COLORS || [
+    [40, 0, 0, 0], [-30, 255, 255, 255], [-38, 140, 222, 255], [-46, 0, 112, 255], [-52, 0, 48, 150],
+    [-54, 0, 140, 60], [-60, 60, 225, 40], [-63, 255, 255, 0], [-68, 255, 150, 0], [-73, 255, 0, 0],
+    [-80, 128, 0, 0], [-86, 0, 0, 0], [-90, 255, 255, 255], [-100, 205, 130, 255]
+  ];
+  function irColor(celsius) {      // [r, g, b] for a brightness temperature
+    var a = IR_COLORS, n = a.length;
+    if (celsius >= a[0][0]) return a[0].slice(1);
+    for (var i = 1; i < n; i++) {
+      if (celsius >= a[i][0]) {
+        var f = (a[i - 1][0] - celsius) / (a[i - 1][0] - a[i][0]);
+        return [1, 2, 3].map(function (k) { return a[i - 1][k] + (a[i][k] - a[i - 1][k]) * f; });
+      }
+    }
+    return a[n - 1].slice(1);
+  }
   var REFRESH_MS = 10 * 60 * 1000;
 
   var VARS = {
@@ -101,7 +119,7 @@
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
   function readColors() {
     var cs = getComputedStyle(document.documentElement), C = {};
-    ['bg', 'panel', 'ink', 'ink-2', 'muted', 'grid', 'axis', 'data', 'data-wash', 'cursor', 'cursor-fill', 'land', 'coast', 'gap', 'line', 'vort-low', 'vort-mid']
+    ['bg', 'panel', 'ink', 'ink-2', 'muted', 'grid', 'axis', 'data', 'data-wash', 'cursor', 'cursor-fill', 'land', 'coast', 'gap', 'line']
       .forEach(function (n) { C[n] = cs.getPropertyValue('--' + n).trim(); });
     var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(C.panel) || [0, 'ff', 'ff', 'ff'];
     C.dark = (parseInt(m[1], 16) * 0.299 + parseInt(m[2], 16) * 0.587 + parseInt(m[3], 16) * 0.114) < 128;
@@ -155,8 +173,9 @@
   function prepareEnv(doc) {
     var ir = doc.ir, v = doc.vort, ks = doc.ccf.thresholds, best = ks[0];
     ks.forEach(function (k) { if (Math.abs(k - CCF_K) < Math.abs(best - CCF_K)) best = k; });
-    var lut = new Uint8ClampedArray(256);
-    for (var b = 0; b < 256; b++) lut[b] = 255 * (IR_GRAY[0] - (ir.tb_max - b * ir.tb_step)) / (IR_GRAY[0] - IR_GRAY[1]);
+    var lut = new Uint8ClampedArray(256 * 3);
+    for (var b = 0; b < 256; b++) lut.set(irColor(ir.tb_max - b * ir.tb_step - 273.15), b * 3);
+    lut[0] = lut[1] = lut[2] = 0;                                 // byte 0 also marks a bad pixel
     var cv = document.createElement('canvas');
     cv.width = cv.height = ir.px;
     return {
@@ -591,10 +610,11 @@
   }
 
   // ---------------------------------------------------------------- IR panel
-  function cased(ctx, color, width, dash, draw) {       // a line that stays readable on both dark sea and white cloud
+  var HALO_DARK = 'rgba(8, 10, 14, 0.7)', HALO_LIGHT = 'rgba(255, 255, 255, 0.85)';
+  function cased(ctx, color, width, dash, draw, halo) {  // a line with a halo, readable on any color of the image
     ctx.setLineDash(dash || []);
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(8, 10, 14, 0.62)'; ctx.lineWidth = width + 2; ctx.beginPath(); draw(); ctx.stroke();
+    ctx.lineJoin = 'round'; ctx.lineCap = dash ? 'butt' : 'round';
+    ctx.strokeStyle = halo || HALO_DARK; ctx.lineWidth = width + 2.2; ctx.beginPath(); draw(); ctx.stroke();
     ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath(); draw(); ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -620,7 +640,7 @@
       else {
         if (E.cvFrame !== fi) {
           var ictx = E.cv.getContext('2d'), img = ictx.createImageData(E.px, E.px), d = img.data;
-          for (var i = 0, j = 0; i < bytes.length; i++, j += 4) { d[j] = d[j + 1] = d[j + 2] = E.lut[bytes[i]]; d[j + 3] = 255; }
+          for (var i = 0, j = 0; i < bytes.length; i++, j += 4) { var o = bytes[i] * 3; d[j] = E.lut[o]; d[j + 1] = E.lut[o + 1]; d[j + 2] = E.lut[o + 2]; d[j + 3] = 255; }
           ictx.putImageData(img, 0, 0);
           E.cvFrame = fi;
         }
@@ -650,10 +670,10 @@
     // the radius the time series are taken over
     var R = S.p.method.radius_km;
     cased(ctx, 'rgba(255, 255, 255, 0.9)', 1, [2, 4], function () { ctx.arc(X(0), Y(0), R * s, 0, 2 * Math.PI); });
-    // vorticity contours: low level solid, mid level dashed
+    // vorticity contours: low level solid black, mid level dashed white (the image uses every hue)
     if (E && hi >= 0) {
       st.irGeom.hi = hi;
-      [['low', C['vort-low'], null], ['mid', C['vort-mid'], [7, 4]]].forEach(function (layer) {
+      [['low', '#000000', null, HALO_LIGHT], ['mid', '#ffffff', [7, 4], HALO_DARK]].forEach(function (layer) {
         var grid = E[layer[0]];
         if (!grid) return;
         VORT_LEVELS.forEach(function (level, li) {
@@ -666,7 +686,7 @@
                 if (k) ctx.lineTo(px, py); else ctx.moveTo(px, py);
               });
             });
-          });
+          }, layer[3]);
         });
       });
     }
@@ -676,8 +696,8 @@
       for (var q = r[0]; q < r[1]; q++) {
         if (!shown(S, q)) continue;
         ctx.globalAlpha = 0.35 + 0.65 * (1 - (st.cursor - 1 - S.k[q]) / Math.max(1, wsteps));
-        ctx.beginPath(); ctx.arc(X(S.x[q]), Y(S.y[q]), 2.4, 0, 2 * Math.PI);
-        ctx.fillStyle = C.data; ctx.fill(); ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'; ctx.lineWidth = 0.8; ctx.stroke();
+        ctx.beginPath(); ctx.arc(X(S.x[q]), Y(S.y[q]), 2.3, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }
@@ -704,17 +724,22 @@
     var E = st.E, box = clear($('ir-legend'));
     if ($('ir-panel').hidden) return;
     var item = el('span', { 'class': 'item' });
-    item.appendChild(el('span', null, 'Brightness temp. (K)'));
-    var rb = el('span', { 'class': 'rampbox' }), bar = el('span', { 'class': 'ramp' }), ticks = el('span', { 'class': 'ticks' });
-    bar.style.background = 'linear-gradient(to right, #000, #fff)';
+    item.appendChild(el('span', null, 'Brightness temp. (°C)'));
+    var rb = el('span', { 'class': 'rampbox' }), bar = el('span', { 'class': 'ramp wide' }), ticks = el('span', { 'class': 'ticks wide' });
+    var warm = 30, cold = -90, stops = [];
+    for (var c = warm; c >= cold; c -= 2) stops.push('rgb(' + irColor(c).map(Math.round).join(',') + ') ' + ((warm - c) / (warm - cold) * 100).toFixed(1) + '%');
+    bar.style.background = 'linear-gradient(to right,' + stops.join(',') + ')';
     bar.style.outline = '1px solid var(--line)';
-    [IR_GRAY[0], (IR_GRAY[0] + IR_GRAY[1]) / 2, IR_GRAY[1]].forEach(function (t) { ticks.appendChild(el('span', null, String(t))); });
+    [30, 0, -30, -60, -90].forEach(function (t) { ticks.appendChild(el('span', null, String(t).replace('-', '−'))); });
     rb.appendChild(bar); rb.appendChild(ticks); item.appendChild(rb); box.appendChild(item);
     if (E && E.anyVort) {
       var layers = E.doc.vort.layers;
-      [['vort-low', layers.low, null], ['vort-mid', layers.mid, '7 4']].forEach(function (k) {
-        var it = el('span', { 'class': 'item' }), svg = el('svg', { width: 30, height: 10, 'aria-hidden': 'true' });
-        var ln = el('line', { x1: 1, x2: 29, y1: 5, y2: 5, stroke: 'var(--' + k[0] + ')', 'stroke-width': 2.5 });
+      [['#000000', layers.low, null, '#ffffff'], ['#ffffff', layers.mid, '7 4', '#0b0d10']].forEach(function (k) {
+        // drawn on a gray chip so the black and the white line both show on the panel
+        var it = el('span', { 'class': 'item' }), svg = el('svg', { width: 34, height: 14, 'aria-hidden': 'true' });
+        svg.appendChild(el('rect', { x: 0, y: 0, width: 34, height: 14, rx: 2, fill: '#7d8a96' }));
+        svg.appendChild(el('line', { x1: 3, x2: 31, y1: 7, y2: 7, stroke: k[3], 'stroke-width': 4.4, 'stroke-opacity': 0.8 }));
+        var ln = el('line', { x1: 3, x2: 31, y1: 7, y2: 7, stroke: k[0], 'stroke-width': 2.2 });
         if (k[2]) ln.setAttribute('stroke-dasharray', k[2]);
         svg.appendChild(ln); it.appendChild(svg);
         it.appendChild(el('span', null, k[1][0] + '–' + k[1][1] + ' hPa vorticity'));
@@ -740,7 +765,8 @@
     if (G.fi >= 0 && E.frame && E.frame.i === G.fi) {
       var col = Math.min(E.px - 1, Math.floor((x + G.half) / (2 * G.half) * E.px)), row = Math.min(E.px - 1, Math.floor((G.half - y) / (2 * G.half) * E.px));
       var b = E.frame.a[row * E.px + col];
-      rows.push(['Brightness temp.', b < 2 ? 'no data' : Math.round(E.doc.ir.tb_max - b * E.doc.ir.tb_step) + ' K']);
+      var kelvin = E.doc.ir.tb_max - b * E.doc.ir.tb_step;
+      rows.push(['Brightness temp.', b < 1 ? 'no data' : String(Math.round(kelvin - 273.15)).replace('-', '−') + ' °C (' + Math.round(kelvin) + ' K)']);
     }
     if (G.hi >= 0) {
       var lo = vortAt(E, E.low, G.hi, x, y), mi = vortAt(E, E.mid, G.hi, x, y);
@@ -918,7 +944,7 @@
       if (row.kind === 'vort' || row.kind === 'ccf') {
         var clipX = function (t) { return Math.max(m.l, Math.min(m.l + pw, X(t))); }, series, vd = E.doc.vort, lo = 0, hi = 1;
         if (row.kind === 'vort') {
-          series = [['var(--vort-low)', null, vd.mean_low, vd.layers.low], ['var(--vort-mid)', '6 4', vd.mean_mid, vd.layers.mid]].map(function (sr) {
+          series = [['var(--ink)', null, vd.mean_low, vd.layers.low], ['var(--ink-2)', '6 4', vd.mean_mid, vd.layers.mid]].map(function (sr) {
             return { color: sr[0], dash: sr[1], label: sr[3][0] + '–' + sr[3][1] + ' hPa', pts: sr[2].map(function (v, i) { return [vd.t0 + i * vd.dt, v]; }) };
           });
         } else {
