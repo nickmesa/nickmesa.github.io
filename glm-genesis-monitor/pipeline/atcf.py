@@ -46,7 +46,9 @@ class Track:
     mslp: np.ndarray
     kind: list                         # ATCF type per fix: DB, LO, WV, TD, TS, HU ...
     name: str = ""
-    transitioned_from: str = ""
+    transitioned_from: str = ""        # 'alb92021' if the b-deck says "TRANSITIONED, alB92021 to al092021"
+    transitioned_to: str = ""
+    source: str = ""                   # set when positions do not come from this id's own b-deck alone
     _t: np.ndarray = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -126,7 +128,7 @@ def parse_bdeck(text, storm_id):
     """Turn b-deck text into a Track. Raises ValueError if no usable fixes."""
     rows = {}
     name = ""
-    moved = ""
+    moved = moved_to = ""
     for line in text.splitlines():
         p = [s.strip() for s in line.split(",")]
         if len(p) < 11 or p[4] != "BEST":
@@ -146,7 +148,7 @@ def parse_bdeck(text, storm_id):
             name = p[27]
         m = re.search(r"TRANSITIONED,\s*(\w+)\s+to\s+(\w+)", line)
         if m:
-            moved = m.group(1).lower()
+            moved, moved_to = m.group(1).lower(), m.group(2).lower()
         # several lines share a time (one per wind radius); keep the first
         rows.setdefault(when, (lat, lon, vmax if vmax > 0 else np.nan, mslp if mslp > 0 else np.nan, p[10]))
     if not rows:
@@ -163,6 +165,7 @@ def parse_bdeck(text, storm_id):
         kind=[v[4] for v in vals],
         name=name.upper(),
         transitioned_from=moved,
+        transitioned_to=moved_to,
     )
 
 
@@ -204,3 +207,106 @@ def fetch_track(storm_id):
             raw = gzip.decompress(raw)
         return parse_bdeck(raw.decode("latin-1"), sid)
     raise FileNotFoundError(f"no b-deck found for {storm_id}")
+
+
+# ------------------------------------------------ pre-genesis positions -----
+# NHC's archived b-deck for a named system is the final best track, which
+# starts at or shortly before genesis. The 72 h before that were tracked under
+# an invest number, kept separately in archive/<year>/invests/. (Real-time
+# b-decks still carry the invest history, so this only matters for past cases.)
+
+def list_archive_invests(year, basin):
+    """Ids of archived invests for a basin and year, e.g. ['alA02021', 'alA12021', ...]."""
+    html = _get(f"{config.ATCF_URL}/archive/{year}/invests/")
+    if html is None:
+        return []
+    found = re.findall(rf"\bb({basin.lower()}[A-Za-z]\d{year})\.dat\.gz\b", html.decode("latin-1"))
+    return sorted(set(found))
+
+
+def _merge(early, late, source):
+    """`late` with the fixes of `early` that precede its first fix put in front."""
+    keep = early._t < late._t[0]
+    return Track(
+        storm_id=late.storm_id,
+        times=np.concatenate([early.times[keep], late.times]),
+        lat=np.concatenate([early.lat[keep], late.lat]),
+        lon=np.concatenate([early.lon[keep], late.lon]),
+        vmax=np.concatenate([early.vmax[keep], late.vmax]),
+        mslp=np.concatenate([early.mslp[keep], late.mslp]),
+        kind=[k for k, w in zip(early.kind, keep) if w] + list(late.kind),
+        name=late.name, transitioned_from=late.transitioned_from, transitioned_to=late.transitioned_to,
+        source=source,
+    )
+
+
+def with_precursor(track, needed_from, log=print):
+    """Extend an archived named system back in time with the invest it grew out of.
+
+    The invest is identified by a TRANSITIONED note naming this system if the
+    b-deck has one, otherwise as the invest whose last fixes lie closest to
+    where and when the best track begins (within 12 h and 300 km).
+    """
+    if track.is_invest or track.first <= needed_from:
+        return track
+    start_s = track._t[0]
+    best = None          # (score, invest track)
+    for iid in list_archive_invests(track.year, track.storm_id[:2]):
+        try:
+            raw = _get(f"{config.ATCF_URL}/archive/{track.year}/invests/b{iid}.dat.gz")
+            inv = parse_bdeck(gzip.decompress(raw).decode("latin-1"), iid)
+        except Exception:
+            continue
+        if inv._t[0] >= start_s or inv._t[-1] > start_s + 48 * 3600:
+            continue                                   # nothing earlier to add, or it outlived the start by days
+        if inv.transitioned_to == track.storm_id.lower() or track.transitioned_from == iid.lower():
+            best = (-1.0, inv)
+            break
+        k = int(np.argmin(np.abs(inv._t - start_s)))    # invest fix nearest the start of the best track
+        gap_h = abs(float(inv._t[k] - start_s)) / 3600.0
+        if gap_h > 12:
+            continue
+        when = np.array([inv._t[k]], dtype="int64").astype("datetime64[s]")
+        lat, lon, _ = track.centre(when)
+        if not np.isfinite(lat[0]):                     # invest ends before the best track starts
+            lat, lon = track.lat[:1], track.lon[:1]
+        dist = float(_haversine(inv.lat[k], inv.lon[k], lat[0], lon[0]))
+        if dist <= 300.0 and (best is None or dist < best[0]):
+            best = (dist, inv)
+    if best is None:
+        log(f"  {track.storm_id}: no archived invest matches the start of the best track; "
+            f"positions begin {track.first:%Y-%m-%d %HZ}")
+        return track
+    score, inv = best
+    how = "TRANSITIONED note" if score < 0 else f"{score:.0f} km from the first best-track position"
+    merged = _merge(inv, track, f"Positions before {track.first:%d %b %HZ} are from invest {inv.storm_id} in the NHC invest archive.")
+    log(f"  {track.storm_id}: joined invest {inv.storm_id} ({how}); positions now begin {merged.first:%Y-%m-%d %HZ}")
+    return merged
+
+
+def _haversine(lat1, lon1, lat2, lon2):
+    from .geo import haversine
+    return haversine(lat1, lon1, lat2, lon2)
+
+
+def load_best_nc(path, storm_id):
+    """Read a combined invest + best-track NetCDF file (the BEST_b<id>.nc files in the paper's Misc_files).
+
+    Uses initialization_time, track_lat, track_lon (0-360 or -180-180), track_type,
+    and track_maxwind / track_mslp when present.
+    """
+    import xarray as xr
+    with xr.open_dataset(path) as ds:
+        t = ds["initialization_time"].values.astype("datetime64[s]")
+        lat = ds["track_lat"].values.astype(float)
+        lon = ds["track_lon"].values.astype(float)
+        kind = [k.decode() if isinstance(k, bytes) else str(k) for k in ds["track_type"].values]
+        vmax = ds["track_maxwind"].values.astype(float) if "track_maxwind" in ds else np.full(len(t), np.nan)
+        mslp = ds["track_mslp"].values.astype(float) if "track_mslp" in ds else np.full(len(t), np.nan)
+    lon = np.where(lon > 180.0, lon - 360.0, lon)
+    ok = np.isfinite(lat) & np.isfinite(lon)
+    order = np.argsort(t[ok])
+    pick = lambda a: np.asarray(a)[ok][order]
+    return Track(storm_id=storm_id[:2].lower() + storm_id[2:], times=pick(t), lat=pick(lat), lon=pick(lon),
+                 vmax=pick(vmax), mslp=pick(mslp), kind=[k.strip() for k in pick(np.array(kind, dtype=object))],
+                 source="Positions are from the combined invest and best-track file used in the paper.")

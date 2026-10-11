@@ -107,6 +107,14 @@ variables), but nothing has touched a real GLM file or a live b-deck yet. On the
 - **No ABI.** Channel 13 brightness temperature and cold cloud fraction are not included.
 - **Genesis** is the first `TS` record in the b-deck, as in `tracks_200km_72hr.py`
   (`GENESIS_TYPES` in `config.py`).
+- **Pre-genesis positions for past named systems.** NHC's archived b-deck for a named system is the
+  final best track, which starts at or shortly before genesis. An archive run therefore joins the
+  invest the system grew out of from `atcf/archive/<year>/invests/`, and the record's note says
+  which invest was used and how many hours of positions exist before genesis. That can be less
+  than 72 h, and the positions are operational invest fixes, not the combined files used in the
+  paper. To reproduce a paper case exactly, put its `BEST_b<id>.nc` from the Dryad `Misc_files`
+  folder in `glm-genesis-monitor/tracks/` (for example `tracks/BEST_bal092021.nc`); an archive run
+  uses that file in preference to NHC's b-decks.
 - **East Pacific** disturbances west of 106°W use GOES-West (`WEST_SWITCH_LON`). The paper's cases
   were all GOES-16.
 

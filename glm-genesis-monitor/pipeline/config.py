@@ -82,6 +82,10 @@ ATCF_URL = os.environ.get("ATCF_URL", "https://ftp.nhc.noaa.gov/atcf").rstrip("/
 GLM_URL = os.environ.get("GLM_URL", "https://{bucket}.s3.amazonaws.com").rstrip("/")
 GLM_PRODUCT = "GLM-L2-LCFA"
 
+# Optional combined invest + best-track files (BEST_b<id>.nc from the paper's
+# Misc_files). An archive run uses one in preference to NHC's b-decks.
+TRACK_DIR = os.environ.get("GLM_TRACK_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tracks"))
+
 DATA_DIR = os.environ.get("GLM_DATA_DIR", "public/data")    # published JSON
 CACHE_DIR = os.environ.get("GLM_CACHE_DIR", "cache")        # gridded cells, not published
 _DATA = os.path.join(os.path.dirname(__file__), "data")

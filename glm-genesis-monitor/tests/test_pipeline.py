@@ -353,3 +353,62 @@ def test_convert_dist2coast(tmp_path, monkeypatch):
     assert float(land.distance_km(-8.0, -50.0)) == 0.0         # so do missing values
     assert np.isnan(land.distance_km(70.0, -40.0))             # outside the stored domain
     monkeypatch.setattr(land, "_GRID", None)
+
+
+def test_archive_joins_precursor_invest(world):
+    """NHC's archived best track starts near genesis; the days before come from the invest archive."""
+    noaa, tmp = world
+    gen = dt("2024-08-10T12:00")
+    line = lambda k: (10.0 + 0.1 * k, -40.0 - 1.5 * k)             # the system's path, k = 6-hourly index
+    best = [(gen - timedelta(hours=6), *line(10), 30, 1007, "TD"), (gen, *line(11), 35, 1005, "TS"),
+            (gen + timedelta(hours=6), *line(12), 40, 1003, "TS")]
+    noaa.archive["2024/bal052024.dat.gz"] = bdeck_text("al", "05", best, name="ERNESTO")
+    right = [(gen - timedelta(hours=6 * (11 - k)), *line(k), 20, 1010, "DB") for k in range(1, 11)]   # -60 h to -6 h
+    far = [(t, la + 8.0, lo, v, p, ty) for t, la, lo, v, p, ty in right]                              # same times, ~890 km north
+    early = [(t - timedelta(days=30), la, lo, v, p, ty) for t, la, lo, v, p, ty in right]             # same path, a month before
+    noaa.archive["2024/invests/balA12024.dat.gz"] = bdeck_text("al", "A1", early)
+    noaa.archive["2024/invests/balB32024.dat.gz"] = bdeck_text("al", "B3", right)
+    noaa.archive["2024/invests/balC32024.dat.gz"] = bdeck_text("al", "C3", far)
+    noaa.archive["2024/invests/bepA12024.dat.gz"] = bdeck_text("ep", "A1", right)                     # other basin
+    prod = run_archive.run("al052024")
+    assert prod["steps"]["n"] == 60 * 12                         # 60 h of positions instead of 6
+    assert "alB32024" in prod["note"] and "60 h" in prod["note"]
+    assert prod["track"]["type"][:3] == ["DB", "DB", "DB"] and prod["genesis"] == "2024-08-10T12:00Z"
+    assert prod["label"] == "Ernesto (AL05)" and prod["steps"]["clat"][0] == pytest.approx(10.1)
+
+    # a TRANSITIONED note in the invest's b-deck decides the match even when another invest is closer
+    marked = [(t, la + 4.0, lo, v, p, ty) for t, la, lo, v, p, ty in right]
+    text = bdeck_text("al", "D7", marked).replace("genesis-num, 040, ", "genesis-num, 040, TRANSITIONED, alD72024 to al052024, ")
+    noaa.archive["2024/invests/balD72024.dat.gz"] = text
+    prod = run_archive.run("al052024")
+    assert "alD72024" in prod["note"] and prod["steps"]["clat"][0] == pytest.approx(14.1)
+
+    # with no usable invest the record is just shorter, and says so
+    for k in list(noaa.archive):
+        if "/invests/" in k:
+            del noaa.archive[k]
+    prod = run_archive.run("al052024")
+    assert prod["steps"]["n"] == 6 * 12 and "Only 6 h" in prod["note"]
+
+
+def test_archive_uses_combined_best_track_file(world, monkeypatch):
+    """A BEST_b<id>.nc file from the paper's Misc_files takes the place of NHC's b-decks."""
+    import xarray as xr
+    noaa, tmp = world
+    gen = dt("2021-08-26T18:00")
+    noaa.archive["2021/bal092021.dat.gz"] = bdeck_text("al", "09", [(gen - timedelta(hours=6), 16.5, -78.9, 30, 1006, "TD"),
+                                                                    (gen, 17.4, -79.5, 35, 1004, "TS")], name="IDA")
+    times = np.array([np.datetime64("2021-08-22T18:00") + np.timedelta64(6 * k, "h") for k in range(20)]).astype("datetime64[ns]")
+    kinds = np.array([b"WV"] * 6 + [b"DB"] * 9 + [b"TD"] + [b"TS"] * 4, dtype="S2")
+    tracks = tmp / "tracks"
+    tracks.mkdir()
+    xr.Dataset({"track_lat": ("initialization_time", 12.0 + 0.3 * np.arange(20)),
+                "track_lon": ("initialization_time", 360.0 - 70.0 - 0.6 * np.arange(20)),      # degrees east, 0-360
+                "track_type": ("initialization_time", kinds),
+                "track_maxwind": ("initialization_time", 20.0 + np.arange(20))},
+               coords={"initialization_time": times}).to_netcdf(tracks / "BEST_bal092021.nc")
+    monkeypatch.setattr(config, "TRACK_DIR", str(tracks))
+    prod = run_archive.run("al092021")
+    assert prod["genesis"] == "2021-08-26T18:00Z" and prod["steps"]["n"] == 72 * 12
+    assert prod["label"] == "Ida (AL09)" and "combined invest and best-track file" in prod["note"]
+    assert prod["steps"]["clon"][0] == pytest.approx(-72.4) and prod["steps"]["clat"][0] == pytest.approx(13.2)
