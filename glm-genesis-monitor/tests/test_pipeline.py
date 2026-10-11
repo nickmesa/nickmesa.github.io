@@ -643,6 +643,14 @@ def test_ir_and_vorticity(envworld):
     assert grid[0, 0, 16] - grid[0, 16, 16] == pytest.approx(north, abs=0.3) and grid[0, 32, 16] < grid[0, 16, 16]
     assert grid[0, 16, 32] > grid[0, 16, 0]                                  # and towards the east
     assert summary["vort_hours"] == 3 and not summary["era5_pending"] and summary["era5_chunks"] == [1, 8, 91, 180]
+    assert v["unit"] == config.VORT_UNIT
+
+    # a record with stronger vorticity than 127 counts can hold is stored with a coarser step, not clipped
+    strong = [dict(low=np.full((33, 33), 90.0, np.float32), mid=np.zeros((33, 33), np.float32), mean_low=90.0, mean_mid=0.0)]
+    centre = env.Centre(record("alZ92022", start, 1, clat, clon))
+    wide, _ = env.write("alZ92022", centre, [], [start], strong, dt("2026-10-11T12:00"))
+    stored = np.frombuffer(__import__("base64").b64decode(wide["vort"]["low"]), dtype=np.int8)
+    assert wide["vort"]["unit"] == pytest.approx(0.75e-5) and stored[0] * wide["vort"]["unit"] / 1e-5 == pytest.approx(90.0)
 
     # a later day that NCAR has not published: IR only, and the record says so
     late = record("al102026", dt("2026-09-30T00:00"), 1, clat, clon)

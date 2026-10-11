@@ -139,12 +139,15 @@ def write(key, centre, frames, hours, samples, now, levels=None):
     grids = {name: np.zeros((len(hours), n, n), dtype=np.int8) for name in ("low", "mid")}
     means = {"low": [], "mid": []}
     have = [int(s is not None) for s in samples]
+    # one count is VORT_UNIT unless the record holds stronger vorticity than an int8 can carry at that step
+    peak = max([float(np.nanmax(np.abs(s[name]))) for s in samples if s is not None for name in ("low", "mid")] + [0.0])
+    unit = max(config.VORT_UNIT, float(np.ceil(peak / 127 * 20) / 20) * 1e-5)
     for i, s in enumerate(samples):
         for name in ("low", "mid"):
             if s is None:
                 means[name].append(None)
                 continue
-            scaled = np.nan_to_num(s[name] * 1e-5 / config.VORT_UNIT, nan=0.0)
+            scaled = np.nan_to_num(s[name] * 1e-5 / unit, nan=0.0)
             grids[name][i] = np.clip(np.rint(scaled), -127, 127).astype(np.int8)
             mean = s["mean_" + name]
             means[name].append(None if mean is None else round(mean, 3))
@@ -163,7 +166,7 @@ def write(key, centre, frames, hours, samples, now, levels=None):
         "vort": {
             "source": "ERA5 relative vorticity (NCAR, s3://nsf-ncar-era5), layer means",
             "t0": int(hours[0].timestamp()), "dt": 3600, "n": len(hours), "have": have,
-            "half_km": config.VORT_HALF_KM, "res_km": config.VORT_RES_KM, "px": n, "unit": config.VORT_UNIT,
+            "half_km": config.VORT_HALF_KM, "res_km": config.VORT_RES_KM, "px": n, "unit": unit,
             "layers": {"low": list(config.VORT_LOW_HPA), "mid": list(config.VORT_MID_HPA)}, "levels": levels,
             "radius_km": config.RADIUS_KM, "mean_low": means["low"], "mean_mid": means["mid"],     # 1e-5 s-1
             "low": _b64(grids["low"]) if any(have) else "", "mid": _b64(grids["mid"]) if any(have) else "",
