@@ -1,34 +1,50 @@
 name: GLM add archive case
 
-# Run by hand from the Actions tab to add a past disturbance to /lightning.
+# Run by hand from the Actions tab to add past disturbances to /lightning.
+# Fill in either "ids" (one or a few cases) or "seasons" (every case of whole seasons).
 on:
   workflow_dispatch:
     inputs:
       ids:
         description: "ATCF id(s), comma separated. Named system: al092021. Archived invest: alA62024"
-        required: true
+        required: false
       start:
-        description: "Window start, UTC (e.g. 2024-06-28T12). Blank = 72 h before genesis, or first fix"
+        description: "With ids: window start, UTC (e.g. 2024-06-28T12). Blank = 72 h before genesis, or first fix"
         required: false
       end:
-        description: "Window end, UTC. Blank = genesis, or last fix"
+        description: "With ids: window end, UTC. Blank = genesis, or last fix"
         required: false
+      seasons:
+        description: "Whole seasons, comma separated (e.g. 2022,2023). Every numbered system and non-developing invest"
+        required: false
+      basins:
+        description: "With seasons: basins to include"
+        required: false
+        default: "al,ep"
+      dry_run:
+        description: "With seasons: only list what would be processed (written to data/backfill/ on the data branch)"
+        type: boolean
+        default: false
+      redo:
+        description: "With seasons: process cases again that are already in the archive"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
-concurrency:
-  group: glm-data
-  cancel-in-progress: false
-
-defaults:
-  run:
-    working-directory: glm-genesis-monitor
-
 jobs:
+  # ---- one or a few cases ----------------------------------------------------
   archive:
+    if: inputs.ids != ''
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    concurrency:
+      group: glm-data          # one writer to the data branch at a time, shared with the hourly update
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: glm-genesis-monitor
     steps:
       - uses: actions/checkout@v4
 
@@ -65,3 +81,126 @@ jobs:
           IDS: ${{ inputs.ids }}
         run: |
           bash tools/publish.sh "archive: $IDS"
+
+  # ---- whole seasons ---------------------------------------------------------
+  # One job per season and basin, in parallel. They only read the data branch;
+  # the "collect" job at the end is the one that writes to it.
+  seasons:
+    if: inputs.seasons != ''
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          SEASONS: ${{ inputs.seasons }}
+          BASINS: ${{ inputs.basins }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          years = [y for y in re.split(r"[,\s]+", os.environ["SEASONS"]) if y]
+          basins = [b.lower() for b in re.split(r"[,\s]+", os.environ["BASINS"] or "al,ep") if b]
+          assert years and all(re.fullmatch(r"20\d\d", y) for y in years), f"seasons must be years, got {years}"
+          assert basins and all(b in ("al", "ep") for b in basins), f"basins must be al and/or ep, got {basins}"
+          print("matrix=" + json.dumps({"include": [{"year": y, "basin": b} for y in years for b in basins]}))
+          PY
+
+  season:
+    needs: seasons
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix: ${{ fromJSON(needs.seasons.outputs.matrix || '{"include":[{"year":"2000","basin":"al"}]}') }}
+    defaults:
+      run:
+        working-directory: glm-genesis-monitor
+    env:
+      GLM_DATA_DIR: out/data
+      GLM_CACHE_DIR: archive-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: See what the archive already holds
+        run: |
+          mkdir -p out/data
+          if git fetch --depth=1 origin glm-data 2>/dev/null; then
+            git show FETCH_HEAD:data/index.json > out/data/index.json || rm -f out/data/index.json
+          fi
+
+      - name: Process
+        env:
+          YEAR: ${{ matrix.year }}
+          BASIN: ${{ matrix.basin }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REDO: ${{ inputs.redo }}
+        run: |
+          args=(--year "$YEAR" --basin "$BASIN" --max-hours 5)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          [ "$REDO" = "true" ] && args+=(--redo)
+          python -m pipeline.run_season "${args[@]}"
+          rm -f out/data/index.json
+
+      - name: Hand the records to the collect job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: season-${{ matrix.year }}-${{ matrix.basin }}
+          path: glm-genesis-monitor/out/data
+          if-no-files-found: ignore
+          retention-days: 14
+
+  collect:
+    needs: [seasons, season]
+    if: ${{ !cancelled() && needs.seasons.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: glm-data
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: glm-genesis-monitor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: season-*
+          path: glm-genesis-monitor/incoming
+
+      - name: Check out the data branch
+        run: |
+          if git fetch --depth=1 origin glm-data:glm-data 2>/dev/null; then
+            git worktree add public glm-data
+          else
+            git worktree add --orphan -b glm-data public
+          fi
+
+      - name: Add the records
+        run: |
+          mkdir -p incoming
+          python -m pipeline.collect incoming
+
+      - name: Publish
+        env:
+          SEASONS: ${{ inputs.seasons }}
+        run: |
+          bash tools/publish.sh "archive: seasons $SEASONS"

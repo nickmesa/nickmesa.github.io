@@ -6,6 +6,7 @@ through its real download and read code in tests. Lightning in these files is
 made up; nothing here is an observation.
 """
 import gzip
+import re
 import threading
 from datetime import timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -124,6 +125,16 @@ class FakeNOAA:
                         return self._send(f"<html><body>{links}</body></html>".encode(), "text/html")
                     if rest.startswith("btk/") and rest[4:] in store.btk:
                         return self._send(store.btk[rest[4:]].encode(), "text/plain")
+                    m = re.fullmatch(r"archive/(\d{4})(/invests)?", rest)
+                    if m:
+                        depth = 3 if m.group(2) else 2
+                        names = sorted(k.split("/")[-1] for k in store.archive
+                                       if k.startswith(f"{m.group(1)}/") and len(k.split("/")) == depth
+                                       and ("/invests/" in k) == bool(m.group(2)))
+                        if not names:                       # NHC has no folder for a season it has not archived yet
+                            return self._send(b"not found", "text/plain", 404)
+                        links = "".join(f'<a href="{n}">{n}</a>\n' for n in names)
+                        return self._send(f"<html><body>{links}</body></html>".encode(), "text/html")
                     if rest.startswith("archive/") and rest[8:] in store.archive:
                         return self._send(gzip.compress(store.archive[rest[8:]].encode()))
                     return self._send(b"not found", "text/plain", 404)

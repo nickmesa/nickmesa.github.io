@@ -21,8 +21,8 @@ to Atlantic and East Pacific disturbances, in real time and for past cases.
 | `lightning/` | The page: `index.html`, `app.js`, `style.css`, `coast.json`, and synthetic examples in `demo/`. Served by GitHub Pages from `main` like the rest of the site. |
 | `glm-genesis-monitor/` | This folder: the Python pipeline, tests and tools. Excluded from the published site in `_config.yml`. |
 | `.github/workflows/glm-realtime.yml` | Hourly update. |
-| `.github/workflows/glm-archive.yml` | Manual run that adds a past case. |
-| branch `glm-data` | The published data: `data/index.json` and `data/storms/<id>.json`. Created by the first workflow run. |
+| `.github/workflows/glm-archive.yml` | Manual run that adds past cases: a few ids, or whole seasons. |
+| branch `glm-data` | The published data: `data/index.json`, `data/storms/<id>.json`, and the season lists in `data/backfill/`. Created by the first workflow run. |
 
 The data sits on its own branch instead of `main` because it is rewritten every hour. On `main`
 that would add a commit and a site rebuild each hour and grow the history by roughly a gigabyte
@@ -66,6 +66,27 @@ Every method parameter is in `pipeline/config.py`.
    https://ftp.nhc.noaa.gov/atcf/archive/2024/invests/ (NHC replaces the 9 with a letter for each
    reuse of an invest number: `A6` is the first 96L of the season, `B6` the second).
 
+### Whole seasons
+
+**Actions → GLM add archive case → Run workflow** with `seasons` filled in (for example
+`2022,2023,2024,2025`) and `ids` left blank adds every disturbance of those seasons:
+
+- every numbered system. One that reached genesis gets the 72 h before it; one that never did
+  (a depression or potential tropical cyclone) gets its whole track as a non-developer;
+- every archived invest that did not become a numbered system, over its whole track. Invests with
+  less than 12 h of track are left out.
+
+Each season and basin runs as its own job, five at a time, at roughly three minutes per case, and
+one last job adds all the records to the data branch. Tick `dry_run` first to see the list without
+processing anything. Either way the list is written to `data/backfill/<year>-<basin>.json` on the
+`glm-data` branch, with one line per b-deck: what it was matched to, the window, and whether it
+was done, skipped (and why) or failed (and why). Cases already in the archive are skipped unless
+`redo` is ticked, so a season that stopped part-way can simply be run again.
+
+Seasons before NHC's archive folder exists (the one in progress) take their numbered systems from
+the real-time folder; that season's non-developing invests only become available once NHC archives
+them, usually early the next year.
+
 Both workflows ask for `contents: write` themselves, so no repository setting should need to
 change. If a run fails at the Publish step with a permission error, set **Settings → Actions →
 General → Workflow permissions** to *Read and write permissions*.
@@ -107,8 +128,21 @@ variables), but nothing has touched a real GLM file or a live b-deck yet. On the
 - **No ABI.** Channel 13 brightness temperature and cold cloud fraction are not included.
 - **Genesis** is the first `TS` record in the b-deck, as in `tracks_200km_72hr.py`
   (`GENESIS_TYPES` in `config.py`).
+- **Pre-genesis positions for past named systems.** NHC's archived b-deck for a named system is the
+  final best track, which starts at or shortly before genesis. An archive run therefore joins the
+  invest the system grew out of from `atcf/archive/<year>/invests/`, and the record's note says
+  which invest was used and how many hours of positions exist before genesis. That can be less
+  than 72 h, and the positions are operational invest fixes, not the combined files used in the
+  paper. To reproduce a paper case exactly, put its `BEST_b<id>.nc` from the Dryad `Misc_files`
+  folder in `glm-genesis-monitor/tracks/` (for example `tracks/BEST_bal092021.nc`); an archive run
+  uses that file in preference to NHC's b-decks.
 - **East Pacific** disturbances west of 106°W use GOES-West (`WEST_SWITCH_LON`). The paper's cases
   were all GOES-16.
+- **GLM outages.** A 5-minute period with no files from the usual satellite is taken from the
+  satellite at the other position when the center is where both see it well (GOES-West west of
+  95°W, GOES-East east of 120°W; `WEST_VIEW_EAST_LIMIT`, `EAST_VIEW_WEST_LIMIT`). The two instruments
+  view such a storm at different angles, so each record lists which satellite every period came
+  from (`steps.sat`). Elsewhere, and when both are out, the period stays empty and shows as a gap.
 
 ## Run it yourself
 
@@ -120,6 +154,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q                               # unit and end-to-end tests, about a minute
 python -m pipeline.run_realtime                   # writes public/data/
 python -m pipeline.run_archive --id al092021      # 72 h before Ida's genesis, ~13,000 files
+python -m pipeline.run_season --year 2022 --basin al --dry-run    # list a season without processing it
 python tools/make_demo.py                         # regenerate the synthetic examples in ../lightning/demo
 ```
 
@@ -127,8 +162,8 @@ To look at locally produced data, serve the repository root (`python -m http.ser
 up) and temporarily point `window.GLM_DATA_BASE` in `lightning/index.html` at
 `../glm-genesis-monitor/public/data/`.
 
-A large backfill (a whole season of invests is roughly 400 GB of downloads) is better run on a
-cluster with `run_archive`, then committed to the `glm-data` branch under `data/`.
+A season is roughly 250 to 300 GB of GLM downloads. That is free from NOAA's bucket and nothing is
+kept: each case is reduced to a JSON file of about 100 KB.
 
 ## Page settings
 
@@ -152,6 +187,9 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
   `energy` mean group energy (fJ), `cell` linked cell id, `life` cell lifetime (min), `land` 1 if
   the cell ever came within 25 km of land, `px` pixels in the segmentation mask.
 - `method`: the parameters used.
+
+`data/backfill/<year>-<basin>.json` is the record of a season run (see *Whole seasons*). The page
+does not read it.
 
 ## Housekeeping
 

@@ -18,7 +18,7 @@ restarted; finished 5-minute steps are kept in the cache folder.
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import atcf, config, glm, process
 
@@ -29,16 +29,29 @@ def log(msg):
     print(msg, flush=True)
 
 
-def run(storm_id, start=None, end=None, now=None):
+def run(storm_id, start=None, end=None, now=None, invests=None):
+    """Process one disturbance. `invests` (from atcf.load_archive_invests) saves refetching in a season run."""
     now = now or datetime.now(UTC)
-    track = atcf.fetch_track(storm_id)
+    sid = storm_id[:2].lower() + storm_id[2:]
+    local = os.path.join(config.TRACK_DIR, f"BEST_b{sid}.nc")
+    if os.path.exists(local):
+        track = atcf.load_best_nc(local, sid)
+        name = atcf_name(sid)
+        track.name = name or track.name
+        log(f"{sid}: track from {local}")
+    else:
+        track = atcf.fetch_track(sid)
+        if not track.is_invest:
+            # the archived best track starts near genesis; the invest archive has the days before
+            anchor = track.genesis_time() or track.first
+            track = atcf.with_precursor(track, anchor - timedelta(hours=config.LOOKBACK_H), invests=invests, log=log)
     w_start, w_end, genesis = process.window_for(track)
     start, end = start or w_start, end or w_end
     if genesis is not None and not (start <= genesis <= end):
         genesis = None
     steps = process.Steps(track, start, end)
     if not len(steps):
-        raise SystemExit(f"{storm_id}: the b-deck has no positions between {start} and {end}")
+        raise ValueError(f"{storm_id}: the b-deck has no positions between {start} and {end}")
     key = track.storm_id
     cache = glm.CellCache(process.cache_path(key))
     need = process.missing(cache, steps, now)
@@ -47,13 +60,17 @@ def run(storm_id, start=None, end=None, now=None):
     # save progress every 12 h of data so an interrupted run can resume
     block = 144
     for lo in range(0, len(need), block):
-        glm.fill({key: (cache, need[lo:lo + block])}, log=log)
+        glm.fill({key: (cache, need[lo:lo + block])}, log=log, now=now)
         cache.save()
     cache.keep_only(steps.t)
     feats, info = process.analyse(steps, cache, log=log)
     outcome = "developed" if genesis is not None else "nondeveloper"
+    covered = (end - start).total_seconds() / 3600
+    note = track.source
+    if genesis is not None and covered < config.LOOKBACK_H - 0.5:
+        note = (note + " " if note else "") + f"Only {covered:.0f} h of positions are available before genesis."
     product = process.build_product(key, track, steps, cache, feats, info, status="ended", outcome=outcome,
-                                    genesis=genesis, now=now)
+                                    genesis=genesis, now=now, note=note)
     index = process.load_index()
     entry = process.publish(product, index)
     process.save_index(index, now)
@@ -61,6 +78,14 @@ def run(storm_id, start=None, end=None, now=None):
         os.remove(cache.path)
     log(f"{key}: {entry['n_features']} features and {entry['n_groups']} groups within {config.RADIUS_KM:.0f} km (away from land)")
     return product
+
+
+def atcf_name(sid):
+    """Storm name from NHC's b-deck, for records whose positions come from a local file."""
+    try:
+        return atcf.fetch_track(sid).name
+    except Exception:
+        return ""
 
 
 def _when(text):

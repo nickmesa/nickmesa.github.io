@@ -28,12 +28,25 @@ SAT_CODE = {"noaa-goes16": 16, "noaa-goes17": 17, "noaa-goes18": 18, "noaa-goes1
 # ----------------------------------------------------------- satellites ----
 def bucket_for(when, lon):
     """Bucket holding the GLM that views this longitude at this time."""
-    fleet = config.WEST_SATS if lon < config.WEST_SWITCH_LON else config.EAST_SATS
+    return _on_duty(config.WEST_SATS if lon < config.WEST_SWITCH_LON else config.EAST_SATS, when)
+
+
+def _on_duty(fleet, when):
     chosen = fleet[0][1]
     for start, bucket in fleet:
         if when >= start:
             chosen = bucket
     return chosen
+
+
+def other_view(bucket, when, lon):
+    """Bucket of the satellite at the other position if it also views this longitude well, else None."""
+    east = bucket in [b for _, b in config.EAST_SATS]
+    if east and lon <= config.WEST_VIEW_EAST_LIMIT:
+        return _on_duty(config.WEST_SATS, when)
+    if not east and lon >= config.EAST_VIEW_WEST_LIMIT:
+        return _on_duty(config.EAST_SATS, when)
+    return None
 
 
 def _alternates(bucket):
@@ -271,7 +284,7 @@ class CellCache:
 
 
 # ------------------------------------------------------------- download ----
-def fill(requests_by_storm, log=print):
+def fill(requests_by_storm, log=print, now=None):
     """Download and grid every step that the caches are missing.
 
     requests_by_storm: {storm key: (cache, [(epoch_s, lat, lon), ...])} listing
@@ -280,14 +293,16 @@ def fill(requests_by_storm, log=print):
     """
     step = config.TIME_RES_MIN * 60
     half = int(round(config.CACHE_HALF_DEG / config.GRID_RES_DEG))
-    plan = {}   # (bucket, hour) -> [(cache, t, ci, cj)]
+    plan = {}   # (bucket, hour) -> [(cache, t, ci, cj, lon)]
     for cache, wanted in requests_by_storm.values():
         for t, lat, lon in wanted:
             when = datetime.fromtimestamp(t, UTC)
             ci, cj = lattice_index(lat, lon, config.GRID_RES_DEG)
             plan.setdefault((bucket_for(when, lon), when.replace(minute=0, second=0, microsecond=0)), []).append(
-                (cache, int(t), int(ci), int(cj)))
+                (cache, int(t), int(ci), int(cj), float(lon)))
     nfiles_total = 0
+    settled = (now or datetime.now(UTC)).timestamp() - config.STANDIN_AFTER_H * 3600
+    standins = {}   # (bucket, hour) -> {step: [keys]} listed from the other position
     for (bucket, hour) in sorted(plan, key=lambda k: (k[1], k[0])):
         jobs = plan[(bucket, hour)]
         used, listing = list_hour_any(bucket, hour)
@@ -297,21 +312,38 @@ def fill(requests_by_storm, log=print):
             t0 = int(start.timestamp()) // step * step
             if t0 in by_step:
                 by_step[t0].append(key)
-        keys = [k for t in needed_t for k in by_step[t]]
+        # where each job's files come from: the usual satellite, or, for a period it
+        # has nothing for, the satellite at the other position if that also sees the storm
+        sources = []
+        for cache, t, ci, cj, lon in jobs:
+            src, keys = used, by_step[t]
+            other = None if keys or t > settled else other_view(used, hour, lon)
+            if other:
+                if (other, hour) not in standins:
+                    found = {}
+                    for start, key in list_hour(other, hour):
+                        found.setdefault(int(start.timestamp()) // step * step, []).append(key)
+                    standins[(other, hour)] = found
+                if standins[(other, hour)].get(t):
+                    src, keys = other, standins[(other, hour)][t]
+            sources.append((src, keys))
+        wanted = sorted({(src, k) for src, keys in sources for k in keys})
         with ThreadPoolExecutor(config.DOWNLOAD_THREADS) as pool:
-            raw = dict(zip(keys, pool.map(lambda k: _fetch(used, k), keys)))
-        nfiles_total += len(keys)
+            raw = dict(zip(wanted, pool.map(lambda item: _fetch(*item), wanted)))
+        nfiles_total += len(wanted)
         groups = {}
-        for key, blob in raw.items():
+        for item, blob in raw.items():
             if blob is None:
                 continue
             try:
-                groups[key] = read_groups(blob)
+                groups[item] = read_groups(blob)
             except Exception as err:   # a corrupt file should not stop the run
-                log(f"  unreadable {key}: {err}")
-        for cache, t, ci, cj in jobs:
-            good = [k for k in by_step[t] if k in groups]
-            parts = [bin_groups(*groups[k], ci, cj, half) for k in good]
-            cache.put(t, len(good), ci, cj, SAT_CODE.get(used, 0), parts)
-        log(f"  {used} {hour:%Y-%m-%d %HZ}: {len(keys)} files for {len(needed_t)} steps")
+                log(f"  unreadable {item[1]}: {err}")
+        for (cache, t, ci, cj, lon), (src, keys) in zip(jobs, sources):
+            good = [(src, k) for k in keys if (src, k) in groups]
+            parts = [bin_groups(*groups[g], ci, cj, half) for g in good]
+            cache.put(t, len(good), ci, cj, SAT_CODE.get(src, 0), parts)
+        borrowed = sorted({src for src, keys in sources if src != used and keys})
+        log(f"  {used} {hour:%Y-%m-%d %HZ}: {len(wanted)} files for {len(needed_t)} steps"
+            + (f" (some from {', '.join(borrowed)})" if borrowed else ""))
     return nfiles_total

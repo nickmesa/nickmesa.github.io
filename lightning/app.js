@@ -179,9 +179,10 @@
   function listed() {
     var all = st.index ? st.index.storms : [];
     if (st.mode === 'realtime') return all.filter(function (e) { return e.status === 'active'; });
-    var b = $('f-basin').value, o = $('f-outcome').value, y = $('f-year').value;
+    var b = $('f-basin').value, o = $('f-outcome').value, y = $('f-year').value, q = $('f-name').value.trim().toLowerCase();
     return all.filter(function (e) {
-      return e.status !== 'active' && (!b || e.basin === b) && (!o || e.outcome === o) && (!y || String(e.year) === y);
+      return e.status !== 'active' && (!b || e.basin === b) && (!o || e.outcome === o) && (!y || String(e.year) === y) &&
+        (!q || (e.label + ' ' + e.atcf_id).toLowerCase().indexOf(q) >= 0);
     });
   }
   function renderList() {
@@ -208,6 +209,9 @@
       li.appendChild(b);
       list.appendChild(li);
     });
+    var total = st.index ? st.index.storms.filter(function (e) { return e.status !== 'active'; }).length : 0, count = $('list-count');
+    count.hidden = st.mode !== 'archive' || total < 8;
+    count.textContent = items.length === total ? total + ' cases' : items.length + ' of ' + total + ' cases';
     var none = $('list-empty');
     none.hidden = items.length > 0;
     if (!items.length) {
@@ -863,7 +867,14 @@
         st.mode = hit ? (hit.status === 'active' ? 'realtime' : 'archive') : (anyLive || !index.storms.length ? 'realtime' : 'archive');
         if (hit) st.id = hit.id;
         setMode(st.mode, !!hit);
-        if (hit) select(hit.id);
+        if (hit) {
+          select(hit.id);
+          var cur = document.querySelector('.storm[aria-current="true"]'), box = $('storm-list');
+          if (cur) {      // bring it into view inside the list without moving the page
+            box.scrollTop = cur.parentNode.offsetTop - box.offsetTop - 8;
+            box.scrollLeft = cur.parentNode.offsetLeft - box.offsetLeft - 8;
+          }
+        }
       } else if (changed) {
         renderList();
         if (st.id && index.storms.some(function (e) { return e.id === st.id; })) select(st.id, true);
@@ -883,6 +894,7 @@
     $('tab-realtime').addEventListener('click', function () { setMode('realtime'); });
     $('tab-archive').addEventListener('click', function () { setMode('archive'); });
     ['f-basin', 'f-outcome', 'f-year'].forEach(function (id) { $(id).addEventListener('change', function () { setMode('archive', true); }); });
+    $('f-name').addEventListener('input', renderList);      // narrows the list without changing what is shown
     ['map', 'dist'].forEach(function (id) {
       $(id).addEventListener('pointermove', function (e) { hoverCanvas(e, id); });
       $(id).addEventListener('pointerleave', function () { hideTip(); if (st.hover >= 0) { st.hover = -1; drawMap(); drawDist(); } });
