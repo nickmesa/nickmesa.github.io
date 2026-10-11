@@ -1,0 +1,65 @@
+name: GLM real-time update
+
+# Hourly: find active Atlantic / East Pacific disturbances, download new GLM
+# files, rerun the tobac analysis, and publish JSON to the glm-data branch.
+# The page at /lightning reads that branch. Nothing here commits to main.
+on:
+  schedule:
+    - cron: "17 * * * *"      # GitHub may start scheduled runs late
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: glm-data            # never two runs writing glm-data at once
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: glm-genesis-monitor
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Check out the data branch
+        run: |
+          if git fetch --depth=1 origin glm-data:glm-data 2>/dev/null; then
+            git worktree add public glm-data
+          else
+            git worktree add --orphan -b glm-data public
+          fi
+          mkdir -p cache && touch cache/.keep
+
+      # Gridded lightning already downloaded for systems still being tracked.
+      # Losing it is harmless: the next run downloads those hours again.
+      - uses: actions/cache/restore@v4
+        with:
+          path: glm-genesis-monitor/cache
+          key: glm-cache-${{ github.run_id }}
+          restore-keys: glm-cache-
+
+      - name: Update
+        run: python -m pipeline.run_realtime
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: glm-genesis-monitor/cache
+          key: glm-cache-${{ github.run_id }}
+
+      - name: Publish
+        run: |
+          bash tools/publish.sh "data: $(date -u +%F)"
