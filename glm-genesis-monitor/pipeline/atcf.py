@@ -249,23 +249,26 @@ def load_archive_invests(year, basin):
 def find_precursors(track, invests):
     """Archived invests that are the earlier life of a numbered system, best match first.
 
-    An invest qualifies if its b-deck carries a TRANSITIONED note naming this
-    system, or if one of its fixes lies within 12 h and 300 km of where the
-    system's own track begins. Returns [(km, Track)], with km = -1 for a note.
+    An invest qualifies if it has a fix within 12 h of where the system's own
+    track begins and that fix is within 300 km of it, or, whatever the
+    distance, the b-decks carry a TRANSITIONED note linking the two. The time
+    test applies to notes as well: the letter NHC gives an archived invest
+    does not always agree with the one in the note, and an invest from weeks
+    earlier must never be joined on. Returns [(km, Track)], km = -1 for a note.
     """
     if track.is_invest:
         return []
     start_s = track._t[0]
     found = []
     for iid, inv in invests.items():
-        if inv.transitioned_to == track.storm_id.lower() or track.transitioned_from == iid.lower():
-            found.append((-1.0, inv))
-            continue
-        if inv._t[-1] > start_s + 48 * 3600 or inv._t[-1] < start_s - 12 * 3600:
-            continue                                   # it outlived the start by days, or ended well before it
         k = int(np.argmin(np.abs(inv._t - start_s)))    # invest fix nearest the start of the system's track
         if abs(float(inv._t[k] - start_s)) > 12 * 3600:
             continue
+        if inv.transitioned_to == track.storm_id.lower() or track.transitioned_from == iid.lower():
+            found.append((-1.0, inv))
+            continue
+        if inv._t[-1] > start_s + 48 * 3600:
+            continue                                   # it carried on for days as something else
         when = np.array([inv._t[k]], dtype="int64").astype("datetime64[s]")
         lat, lon, _ = track.centre(when)
         if not np.isfinite(lat[0]):                     # the invest ends before the track starts

@@ -22,7 +22,10 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
+
 from . import atcf, config, process, run_archive
+from .geo import haversine
 
 UTC = timezone.utc
 MIN_INVEST_H = 12          # shorter invest tracks are not worth a record
@@ -61,7 +64,7 @@ def build_plan(year, now=None, basins=config.BASINS):
         invests.update(atcf.load_archive_invests(year, basin))
         numbered += atcf.list_archive_numbered(year, basin)
 
-    cases, used = [], {}
+    cases, used, origin = [], {}, []        # origin: (id, genesis, lat, lon) of the systems kept
     for sid in numbered:
         try:
             track = atcf.fetch_track(sid)
@@ -71,8 +74,20 @@ def build_plan(year, now=None, basins=config.BASINS):
                           "status": "failed", "reason": f"could not read the b-deck: {err}"[:200]})
             continue
         for _, inv in atcf.find_precursors(track, invests):
-            used[inv.storm_id] = track.storm_id
+            used.setdefault(inv.storm_id, track.storm_id)
         genesis = track.genesis_time()
+        same = _same_system(track, genesis, origin)
+        if same:
+            # a storm that crosses from one basin to the other is given a second number there,
+            # and that b-deck repeats the whole track
+            case = _case(track, "numbered")
+            case.update(outcome="developed", genesis=_iso(genesis))
+            cases.append(_skip(case, f"same system as {same} (crossed basins)"))
+            continue
+        if genesis is not None:
+            g = np.array([np.datetime64(genesis.replace(tzinfo=None), "s")])
+            lat, lon, _ = track.centre(g)
+            origin.append((track.storm_id, genesis, float(lat[0]), float(lon[0])))
         anchor = genesis or track.first
         merged = atcf.with_precursor(track, anchor - timedelta(hours=config.LOOKBACK_H), invests=invests, log=lambda m: None)
         start, end, genesis = process.window_for(merged)
@@ -86,18 +101,36 @@ def build_plan(year, now=None, basins=config.BASINS):
             _skip(case, "the best track starts at genesis and no archived invest matches it")
         cases.append(case)
 
+    seen = {}
     for iid, inv in sorted(invests.items()):
         start, end, _ = process.window_for(inv)
         case = _case(inv, "invest")
         case.update(outcome="nondeveloper", start=_iso(start), end=_iso(end),
                     hours=round((end - start).total_seconds() / 3600, 1))
         became = used.get(iid) or (inv.transitioned_to if inv.transitioned_to and not _is_invest_id(inv.transitioned_to) else "")
+        shape = (int(inv._t[0]), int(inv._t[-1]), len(inv._t), round(float(inv.lat[0]), 1), round(float(inv.lon[0]), 1))
         if became:
             _skip(case, f"became {became}")
         elif case["hours"] < MIN_INVEST_H:
             _skip(case, f"track shorter than {MIN_INVEST_H} h")
+        elif shape in seen:
+            _skip(case, f"same track as {seen[shape]}")       # NHC's archive holds some invests under two letters
+        else:
+            seen[shape] = iid
         cases.append(case)
     return cases, invests
+
+
+def _same_system(track, genesis, origin):
+    """Id of an earlier numbered system that is this one under another basin's number, or ''."""
+    if genesis is None:
+        return ""
+    g = np.array([np.datetime64(genesis.replace(tzinfo=None), "s")])
+    lat, lon, _ = track.centre(g)
+    for sid, when, la, lo in origin:
+        if sid[:2] != track.storm_id[:2] and when == genesis and haversine(la, lo, float(lat[0]), float(lon[0])) < 100.0:
+            return sid
+    return ""
 
 
 def _is_invest_id(sid):

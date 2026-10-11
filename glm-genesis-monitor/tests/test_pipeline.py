@@ -433,10 +433,19 @@ def test_season_backfill(world, monkeypatch):
                                                                     (gen2, 12.2, -93.0, 35, 1005, "TS")], name="ALETTA")
     noaa.archive["2024/invests/balF42024.dat.gz"] = bdeck_text("al", "F4", six_h(gen2 - timedelta(hours=24), 4, 11.9, -88.9))
     noaa.archive["2024/aal052024.dat.gz"] = "not a best track"
+    # Ernesto crosses into the East Pacific and is numbered again there; that b-deck repeats the whole track
+    noaa.archive["2024/bep022024.dat.gz"] = bdeck_text("ep", "02", [(gen - timedelta(hours=6), *line(10), 30, 1007, "TD"),
+                                                                    (gen, *line(11), 35, 1005, "TS"),
+                                                                    (gen + timedelta(hours=96), 14.0, -95.0, 60, 990, "TS")], name="ERNESTO")
+    noaa.archive["2024/invests/balC12024.dat.gz"] = noaa.archive["2024/invests/balA12024.dat.gz"].replace("A1", "C1")   # filed twice
+    # a note that names an invest from a month before must not pull it in
+    noaa.archive["2024/bal052024.dat.gz"] = noaa.archive["2024/bal052024.dat.gz"].replace(
+        "genesis-num, 040, ", "genesis-num, 040, TRANSITIONED, alA12024 to al052024, ")
 
     now = dt("2026-10-11T12:00")
     cases = {c["id"]: c for c in run_season.run(2024, "al", dry_run=True, now=now)}
-    assert sorted(cases) == ["al052024", "al062024", "alA12024", "alB32024", "alE22024", "alF42024"]
+    assert sorted(cases) == ["al052024", "al062024", "alA12024", "alB32024", "alC12024", "alE22024", "alF42024"]
+    assert cases["alC12024"]["reason"] == "same track as alA12024"
     assert cases["al052024"]["outcome"] == "developed" and cases["al052024"]["precursor"] == "alB32024"
     assert cases["al052024"]["hours"] == 24 and cases["al052024"]["label"] == "Ernesto (AL05)"
     assert cases["al062024"]["outcome"] == "nondeveloper" and cases["al062024"]["hours"] == 12
@@ -444,7 +453,7 @@ def test_season_backfill(world, monkeypatch):
     assert cases["alB32024"]["reason"] == "became al052024" and cases["alF42024"]["reason"] == "became ep012024"
     assert cases["alE22024"]["status"] == "skipped" and "shorter" in cases["alE22024"]["reason"]
     plan = json.loads((tmp / "data/backfill/2024-al.json").read_text())
-    assert plan["counts"] == {"pending": 3, "skipped": 3} and not (tmp / "data/storms").exists()
+    assert plan["counts"] == {"pending": 3, "skipped": 4} and not (tmp / "data/storms").exists()
 
     # one case failing does not stop the others, and the plan records why
     real_run = run_archive.run
@@ -464,14 +473,15 @@ def test_season_backfill(world, monkeypatch):
     monkeypatch.setattr(run_archive, "run", lambda sid, **kw: ran.append(sid) or real_run(sid, **kw))
     cases = {c["id"]: c for c in run_season.run(2024, "al", now=now)}
     assert ran == ["al062024"] and cases["al052024"]["reason"] == "already in the archive"
-    assert json.loads((tmp / "data/backfill/2024-al.json").read_text())["counts"] == {"done": 3, "skipped": 3}
+    assert json.loads((tmp / "data/backfill/2024-al.json").read_text())["counts"] == {"done": 3, "skipped": 4}
     assert load(tmp, "al062024")["outcome"] == "nondeveloper" and load(tmp, "al062024")["genesis"] is None
     assert run_season.run(2024, "al", max_hours=0, redo=True, now=now)[0]["status"] == "pending"     # out of time: nothing started
 
     # the other basin is processed into its own folder, as a parallel job would, then collected
     monkeypatch.setattr(config, "DATA_DIR", str(tmp / "job" / "data"))
     cases = {c["id"]: c for c in run_season.run(2024, "ep", now=now)}
-    assert list(cases) == ["ep012024"] and cases["ep012024"]["precursor"] == "alF42024" and cases["ep012024"]["hours"] == 24
+    assert list(cases) == ["ep012024", "ep022024"] and cases["ep012024"]["precursor"] == "alF42024" and cases["ep012024"]["hours"] == 24
+    assert cases["ep022024"]["reason"] == "same system as al052024 (crossed basins)"
     monkeypatch.setattr(config, "DATA_DIR", str(tmp / "data"))
     assert collect.collect(str(tmp / "job"), now=now, log=lambda m: None) == (1, 1)
     assert sorted(e["id"] for e in load(tmp)["storms"]) == ["al052024", "al062024", "alA12024", "ep012024"]
