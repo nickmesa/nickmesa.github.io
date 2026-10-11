@@ -201,7 +201,8 @@
     }
     return sh;
   }
-  function frameAt(E, t) { return lowerBound(E.t, t + 1) - 1; }       // last scan that started at or before t
+  // Last scan at or before t. Scans start about 20 s after their nominal minute, so the 12:00 scan belongs to 12:00.
+  function frameAt(E, t) { return lowerBound(E.t, t + 61) - 1; }
   function frameBytes(E, fi) {     // the px*px stored bytes of one frame, once its sheet is in
     if (E.frame && E.frame.i === fi) return E.frame.a;
     var sh = sheetFor(E, fi);
