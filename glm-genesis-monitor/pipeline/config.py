@@ -67,6 +67,12 @@ EXPECTED_FILES_PER_STEP = 3 * TIME_RES_MIN   # GLM writes one file every 20 s
 # GOES-West when the centre is west of WEST_SWITCH_LON (the longitude where
 # the two view angles are about equal).
 WEST_SWITCH_LON = -106.0
+# Where the two views overlap, a 5-minute period with no files from the usual
+# satellite is taken from the other one instead (GLM outages can last a day).
+# These limits keep that to longitudes well inside the other instrument's view.
+WEST_VIEW_EAST_LIMIT = -95.0      # GOES-West is used as a stand-in west of this
+EAST_VIEW_WEST_LIMIT = -120.0     # GOES-East is used as a stand-in east of this
+STANDIN_AFTER_H = 2               # not for the newest periods, whose files may only be late
 EAST_SATS = [  # (operational from, bucket)
     (datetime(2017, 12, 18, tzinfo=timezone.utc), "noaa-goes16"),
     (datetime(2025, 4, 7, 15, tzinfo=timezone.utc), "noaa-goes19"),

@@ -138,6 +138,11 @@ variables), but nothing has touched a real GLM file or a live b-deck yet. On the
   uses that file in preference to NHC's b-decks.
 - **East Pacific** disturbances west of 106°W use GOES-West (`WEST_SWITCH_LON`). The paper's cases
   were all GOES-16.
+- **GLM outages.** A 5-minute period with no files from the usual satellite is taken from the
+  satellite at the other position when the center is where both see it well (GOES-West west of
+  95°W, GOES-East east of 120°W; `WEST_VIEW_EAST_LIMIT`, `EAST_VIEW_WEST_LIMIT`). The two instruments
+  view such a storm at different angles, so each record lists which satellite every period came
+  from (`steps.sat`). Elsewhere, and when both are out, the period stays empty and shows as a gap.
 
 ## Run it yourself
 

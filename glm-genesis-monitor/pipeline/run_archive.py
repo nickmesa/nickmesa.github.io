@@ -60,7 +60,7 @@ def run(storm_id, start=None, end=None, now=None, invests=None):
     # save progress every 12 h of data so an interrupted run can resume
     block = 144
     for lo in range(0, len(need), block):
-        glm.fill({key: (cache, need[lo:lo + block])}, log=log)
+        glm.fill({key: (cache, need[lo:lo + block])}, log=log, now=now)
         cache.save()
     cache.keep_only(steps.t)
     feats, info = process.analyse(steps, cache, log=log)

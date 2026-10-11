@@ -330,6 +330,31 @@ def test_archive_run(world):
     assert prod["label"] == "Invest 96L" and prod["outcome"] == "nondeveloper" and prod["steps"]["n"] == 72
 
 
+def test_other_satellite_fills_an_outage(world):
+    """Where both GLMs see the storm, a period the usual one has no files for comes from the other."""
+    noaa, tmp = world
+    assert glm.other_view("noaa-goes19", dt("2026-07-16T18:00"), -102.0) == "noaa-goes18"
+    assert glm.other_view("noaa-goes16", dt("2022-09-13T12:00"), -45.0) is None        # GOES-West cannot see it
+    assert glm.other_view("noaa-goes18", dt("2026-07-16T18:00"), -115.0) == "noaa-goes19"
+    assert glm.other_view("noaa-goes17", dt("2022-07-16T18:00"), -135.0) is None
+    gen = dt("2026-07-17T00:00")
+    fixes = [(gen - timedelta(hours=6), 14.0, -102.0, 30, 1007, "TD"), (gen, 14.0, -103.0, 35, 1005, "TS")]
+    noaa.btk["bep062026.dat"] = bdeck_text("ep", "06", fixes, name="FAUSTO")
+    maker = lambda t: [(14.0, -102.3, 3, 180, 0)] * 2
+    put_hours(noaa, "noaa-goes19", gen - timedelta(hours=6), 2, maker)          # East has the first 2 h, then an outage
+    put_hours(noaa, "noaa-goes18", gen - timedelta(hours=6), 5, maker)          # West has 5 h; nobody has the last hour
+    prod = run_archive.run("ep062026")
+    assert prod["steps"]["sat"] == [[0, 19], [24, 18], [60, 19]]                 # stand-in only where East has nothing
+    assert prod["steps"]["nfiles"] == [15] * 60 + [0] * 12
+    assert len(feature_rows(prod)) == 60
+
+    # an Atlantic system out of GOES-West's view keeps its gap
+    fixes = [(gen - timedelta(hours=6), 14.0, -45.0, 30, 1007, "TD"), (gen, 14.0, -46.0, 35, 1005, "TS")]
+    noaa.btk["bal032026.dat"] = bdeck_text("al", "03", fixes, name="CRISTOBAL")
+    prod = run_archive.run("al032026")
+    assert prod["steps"]["nfiles"] == [15] * 24 + [0] * 48 and prod["steps"]["sat"] == [[0, 19]]      # no GOES-18 files used
+
+
 def test_convert_dist2coast(tmp_path, monkeypatch):
     """The paper's dist file (here a coarse stand-in on a 0-360 grid) converts to the layout land.py reads."""
     import xarray as xr

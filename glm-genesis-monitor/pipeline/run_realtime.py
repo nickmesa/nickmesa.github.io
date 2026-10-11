@@ -141,7 +141,7 @@ def main(argv=None):
         log(f"  {j['key']} {process.storm_label(j['track'])}: {len(j['steps'])} steps, {len(need)} to download"
             + (f" ({len(need) - len(take)} left for the next run)" if len(take) < len(need) else ""))
     if wanted:
-        log(f"  downloaded {glm.fill(wanted, log=log)} GLM files")
+        log(f"  downloaded {glm.fill(wanted, log=log, now=now)} GLM files")
 
     # ---- 4. analyse and publish --------------------------------------------
     for j in jobs:
