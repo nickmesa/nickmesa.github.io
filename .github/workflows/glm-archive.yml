@@ -1,0 +1,67 @@
+name: GLM add archive case
+
+# Run by hand from the Actions tab to add a past disturbance to /lightning.
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: "ATCF id(s), comma separated. Named system: al092021. Archived invest: alA62024"
+        required: true
+      start:
+        description: "Window start, UTC (e.g. 2024-06-28T12). Blank = 72 h before genesis, or first fix"
+        required: false
+      end:
+        description: "Window end, UTC. Blank = genesis, or last fix"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: glm-data
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: glm-genesis-monitor
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glm-genesis-monitor/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Check out the data branch
+        run: |
+          if git fetch --depth=1 origin glm-data:glm-data 2>/dev/null; then
+            git worktree add public glm-data
+          else
+            git worktree add --orphan -b glm-data public
+          fi
+
+      - name: Process
+        env:
+          IDS: ${{ inputs.ids }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          GLM_CACHE_DIR: archive-cache
+        run: |
+          args=(--id "$IDS")
+          [ -n "$START" ] && args+=(--start "$START")
+          [ -n "$END" ] && args+=(--end "$END")
+          python -m pipeline.run_archive "${args[@]}"
+
+      - name: Publish
+        env:
+          IDS: ${{ inputs.ids }}
+        run: |
+          bash tools/publish.sh "archive: $IDS"

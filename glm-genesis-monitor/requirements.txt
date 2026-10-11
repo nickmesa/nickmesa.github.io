@@ -1,0 +1,10 @@
+# Versions the test suite was run with (Python 3.11).
+tobac==1.6.3
+numpy==2.4.6
+pandas==2.3.3          # keep below 3 until tobac supports it
+xarray==2026.9.0
+netCDF4==1.7.4
+scipy==1.17.1
+scikit-image==0.26.0
+trackpy==0.7
+requests==2.34.2

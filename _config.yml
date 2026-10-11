@@ -1,1 +1,9 @@
 theme: jekyll-theme-cayman
+
+# Processing code for /lightning is not part of the published site.
+# (Gemfile entries are listed because setting `exclude` replaces Jekyll's defaults.)
+exclude:
+  - glm-genesis-monitor
+  - Gemfile
+  - Gemfile.lock
+  - vendor

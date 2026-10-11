@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pre-Genesis Lightning Monitor</title>
+<meta name="description" content="GOES GLM lightning features within 200 km of Atlantic and East Pacific tropical disturbances, in real time and for past cases.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <div class="brand">
+      <a class="home" href="../">Nicholas A. Mesa</a>
+      <h1>Pre-Genesis Lightning Monitor</h1>
+      <p>GOES GLM lightning features within 200&nbsp;km of Atlantic and East Pacific disturbances</p>
+    </div>
+    <div class="top-right">
+      <div class="tabs" role="tablist" aria-label="Data set">
+        <button type="button" role="tab" id="tab-realtime" aria-selected="true">Real time</button>
+        <button type="button" role="tab" id="tab-archive" aria-selected="false">Archive</button>
+      </div>
+      <p class="stamp" id="stamp"></p>
+    </div>
+  </header>
+
+  <p class="banner" id="demo-banner" hidden><strong>Synthetic example data.</strong> The tracks and lightning shown here are made up to demonstrate the page. They are not observations.</p>
+
+  <main class="layout">
+    <aside class="rail" aria-label="Disturbances">
+      <div class="filters" id="archive-filters" hidden>
+        <label for="f-basin">Basin</label>
+        <select id="f-basin"><option value="">All</option><option value="AL">Atlantic</option><option value="EP">East Pacific</option></select>
+        <label for="f-outcome">Outcome</label>
+        <select id="f-outcome"><option value="">All</option><option value="developed">Developed</option><option value="nondeveloper">Did not develop</option></select>
+        <label for="f-year">Year</label>
+        <select id="f-year"><option value="">All</option></select>
+      </div>
+      <ul class="storms" id="storm-list"></ul>
+      <p class="rail-empty" id="list-empty" hidden></p>
+    </aside>
+
+    <section class="detail" id="detail" hidden>
+      <div class="headline">
+        <div class="ident">
+          <div class="title-row"><h2 id="st-label"></h2><span class="chip" id="st-chip"></span></div>
+          <p class="note" id="st-note" hidden></p>
+          <dl class="facts" id="st-facts"></dl>
+        </div>
+        <figure class="track">
+          <svg id="track-map" role="img" aria-label="Track of the disturbance"></svg>
+        </figure>
+      </div>
+
+      <div class="controls" role="group" aria-label="View settings">
+        <div class="ctl ctl-time">
+          <button type="button" id="play" class="play" aria-label="Play">Play</button>
+          <input type="range" id="cursor" min="1" max="1" step="1" value="1" aria-label="End of the time window">
+          <output id="cursor-out" for="cursor"></output>
+        </div>
+        <div class="ctl">
+          <span class="ctl-label" id="lab-win">Window</span>
+          <div class="seg" id="seg-win" role="radiogroup" aria-labelledby="lab-win"></div>
+        </div>
+        <div class="ctl">
+          <span class="ctl-label" id="lab-color">Color by</span>
+          <div class="seg" id="seg-color" role="radiogroup" aria-labelledby="lab-color"></div>
+        </div>
+        <div class="ctl">
+          <span class="ctl-label" id="lab-bin">Time bins</span>
+          <div class="seg" id="seg-bin" role="radiogroup" aria-labelledby="lab-bin"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="inc-land"> Include cells near land</label>
+      </div>
+
+      <div class="tiles" id="tiles"></div>
+      <p class="scope" id="scope"></p>
+
+      <div class="panels">
+        <figure class="panel" id="map-panel">
+          <figcaption><strong>Storm-centered lightning features</strong><span id="map-sub"></span></figcaption>
+          <div class="square"><canvas id="map" aria-label="Map of lightning features relative to the disturbance center"></canvas></div>
+          <div class="legend" id="map-legend"></div>
+        </figure>
+        <figure class="panel" id="dist-panel">
+          <figcaption><strong>Group area and energy of features</strong><span id="dist-sub"></span></figcaption>
+          <div class="square"><canvas id="dist" aria-label="Mean group area against mean group energy for each feature"></canvas></div>
+          <div class="legend" id="dist-legend"></div>
+        </figure>
+      </div>
+
+      <figure class="panel" id="ts-panel">
+        <figcaption><strong>Evolution within 200&nbsp;km</strong><span id="ts-sub"></span></figcaption>
+        <div id="ts-wrap"><svg id="ts" role="img" aria-label="Time series of lightning groups, features, group area and group energy"></svg></div>
+        <details class="table-view">
+          <summary>Show these values as a table</summary>
+          <div class="table-scroll"><table id="ts-table"></table></div>
+        </details>
+      </figure>
+
+      <section class="method" id="method"></section>
+    </section>
+
+    <section class="empty" id="empty" hidden></section>
+  </main>
+
+  <footer class="foot">
+    <p>Method: Mesa, N., B. Trabing, M. Bell, A. Brammer, P. Duran, P. Klotzbach, K. Musgrave, and S. Stevenson, <em>An object-based analysis of lightning characteristics in pre-tropical cyclogenesis environments</em>. Code and data: <a href="https://doi.org/10.5061/dryad.x95x69pzq">doi.org/10.5061/dryad.x95x69pzq</a>.</p>
+    <p>Lightning: GOES-R Geostationary Lightning Mapper L2 (NOAA Open Data Dissemination). Centers: NHC ATCF best-track files. Features: <a href="https://tobac.readthedocs.io/">tobac</a>. Coastline: Natural Earth.</p>
+    <p>Experimental research product. Not an official forecast; see <a href="https://www.nhc.noaa.gov/">nhc.noaa.gov</a> for outlooks and advisories.</p>
+  </footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+<script>
+  // Data is published by the "GLM real-time update" workflow to the glm-data branch of this repository.
+  window.GLM_DATA_BASE = "https://raw.githubusercontent.com/nickmesa/nickmesa.github.io/glm-data/data/";
+</script>
+<script src="app.js"></script>
+</body>
+</html>
