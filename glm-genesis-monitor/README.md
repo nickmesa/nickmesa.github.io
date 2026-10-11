@@ -61,7 +61,8 @@ lightning record is already in the archive:
   are dropped (`QC_abi` in `Get_ABI.py`, without its whole-file test, which needs the full disk).
 - **Cold cloud fraction** within 200 km: cold pixels over all pixels in the circle, and no value
   for a scan with more than 10% bad pixels there, as in `cold_cloud_fraction`. It is stored for
-  the thresholds in `CCF_THRESHOLDS_K`; the page shows 208 K unless `window.GLM_CCF_K` is set.
+  the thresholds in `CCF_THRESHOLDS_K`; the page shows 240 K, the paper's threshold, unless
+  `window.GLM_CCF_K` is set.
 - **ERA5 relative vorticity** each hour, as the mean over every ERA5 pressure level from 900 to
   700 hPa (low level, 8 levels) and from 600 to 400 hPa (mid level, 5 levels), on a 24 km grid for
   the contours, and its mean within 200 km weighted by the cosine of latitude, as in
@@ -213,7 +214,7 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
 |---|---|
 | `window.GLM_DATA_BASE` | Where `index.json` and `storms/` live. |
 | `window.GLM_ENV_BASE` | Where the IR images and vorticity live. Unset hides the infrared panel. |
-| `window.GLM_CCF_K` | Cold cloud threshold in K (one of 195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240). Default 208. |
+| `window.GLM_CCF_K` | Cold cloud threshold in K (one of 195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240). Default 240. |
 | `window.GLM_VORT_LEVELS` | Vorticity contour levels in 10⁻⁵ s⁻¹. Default `[5, 10, 20, 40]`. |
 | `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: gray above −30 °C, then blue, green, yellow, orange and red toward colder tops. It is applied in the browser, so changing it needs no reprocessing. |
 | `window.GLM_DOMAINS` | Fixed ranges for the color scale and axes, e.g. `{ area: [60, 3000], energy: [0.5, 500], life: [5, 240] }`, so cases can be compared by eye. By default each record uses its own 2nd to 98th percentile range. |

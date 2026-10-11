@@ -15,7 +15,7 @@
   var MAP_HALF_KM = 260;
   // Archived cases: channel 13 images and ERA5 vorticity (written by pipeline/env.py).
   var ENV_BASE = EMBED ? null : (DEMO ? 'demo/env/' : (window.GLM_ENV_BASE || null));
-  var CCF_K = window.GLM_CCF_K || 208;                         // cold cloud threshold (K); see config.CCF_THRESHOLDS_K
+  var CCF_K = window.GLM_CCF_K || 240;                         // cold cloud threshold (K); see config.CCF_THRESHOLDS_K
   var VORT_LEVELS = window.GLM_VORT_LEVELS || [5, 10, 20, 40]; // contours, 1e-5 s-1
   // Enhanced infrared color scale of the kind used on tropical weather sites: gray for warm
   // surfaces and low cloud, then blue, green, yellow, orange and red toward colder cloud tops.
