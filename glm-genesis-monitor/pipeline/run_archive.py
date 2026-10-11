@@ -29,7 +29,8 @@ def log(msg):
     print(msg, flush=True)
 
 
-def run(storm_id, start=None, end=None, now=None):
+def run(storm_id, start=None, end=None, now=None, invests=None):
+    """Process one disturbance. `invests` (from atcf.load_archive_invests) saves refetching in a season run."""
     now = now or datetime.now(UTC)
     sid = storm_id[:2].lower() + storm_id[2:]
     local = os.path.join(config.TRACK_DIR, f"BEST_b{sid}.nc")
@@ -40,17 +41,17 @@ def run(storm_id, start=None, end=None, now=None):
         log(f"{sid}: track from {local}")
     else:
         track = atcf.fetch_track(sid)
-        genesis = track.genesis_time()
-        if genesis is not None and not track.is_invest:
+        if not track.is_invest:
             # the archived best track starts near genesis; the invest archive has the days before
-            track = atcf.with_precursor(track, genesis - timedelta(hours=config.LOOKBACK_H), log=log)
+            anchor = track.genesis_time() or track.first
+            track = atcf.with_precursor(track, anchor - timedelta(hours=config.LOOKBACK_H), invests=invests, log=log)
     w_start, w_end, genesis = process.window_for(track)
     start, end = start or w_start, end or w_end
     if genesis is not None and not (start <= genesis <= end):
         genesis = None
     steps = process.Steps(track, start, end)
     if not len(steps):
-        raise SystemExit(f"{storm_id}: the b-deck has no positions between {start} and {end}")
+        raise ValueError(f"{storm_id}: the b-deck has no positions between {start} and {end}")
     key = track.storm_id
     cache = glm.CellCache(process.cache_path(key))
     need = process.missing(cache, steps, now)

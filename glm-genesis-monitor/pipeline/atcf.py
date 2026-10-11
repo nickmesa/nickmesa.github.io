@@ -49,6 +49,7 @@ class Track:
     transitioned_from: str = ""        # 'alb92021' if the b-deck says "TRANSITIONED, alB92021 to al092021"
     transitioned_to: str = ""
     source: str = ""                   # set when positions do not come from this id's own b-deck alone
+    precursor: str = ""                # id of the archived invest joined on, if any
     _t: np.ndarray = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -224,6 +225,57 @@ def list_archive_invests(year, basin):
     return sorted(set(found))
 
 
+def list_archive_numbered(year, basin):
+    """Ids of numbered systems for a basin and year, from the archive or, for the current season, the real-time directory."""
+    html = _get(f"{config.ATCF_URL}/archive/{year}/")
+    nums = re.findall(rf"\bb{basin.lower()}(\d\d){year}\.dat\.gz\b", html.decode("latin-1")) if html else []
+    if not nums:
+        nums = [sid[2:4] for sid in list_realtime() if sid.startswith(basin.lower()) and sid.endswith(str(year))]
+    return sorted({f"{basin.lower()}{n}{year}" for n in nums if int(n) < 50})
+
+
+def load_archive_invests(year, basin):
+    """{id: Track} for every archived invest of a basin and year that can be read."""
+    out = {}
+    for iid in list_archive_invests(year, basin):
+        try:
+            raw = _get(f"{config.ATCF_URL}/archive/{year}/invests/b{iid}.dat.gz")
+            out[iid] = parse_bdeck(gzip.decompress(raw).decode("latin-1"), iid)
+        except Exception:
+            continue
+    return out
+
+
+def find_precursors(track, invests):
+    """Archived invests that are the earlier life of a numbered system, best match first.
+
+    An invest qualifies if its b-deck carries a TRANSITIONED note naming this
+    system, or if one of its fixes lies within 12 h and 300 km of where the
+    system's own track begins. Returns [(km, Track)], with km = -1 for a note.
+    """
+    if track.is_invest:
+        return []
+    start_s = track._t[0]
+    found = []
+    for iid, inv in invests.items():
+        if inv.transitioned_to == track.storm_id.lower() or track.transitioned_from == iid.lower():
+            found.append((-1.0, inv))
+            continue
+        if inv._t[-1] > start_s + 48 * 3600 or inv._t[-1] < start_s - 12 * 3600:
+            continue                                   # it outlived the start by days, or ended well before it
+        k = int(np.argmin(np.abs(inv._t - start_s)))    # invest fix nearest the start of the system's track
+        if abs(float(inv._t[k] - start_s)) > 12 * 3600:
+            continue
+        when = np.array([inv._t[k]], dtype="int64").astype("datetime64[s]")
+        lat, lon, _ = track.centre(when)
+        if not np.isfinite(lat[0]):                     # the invest ends before the track starts
+            lat, lon = track.lat[:1], track.lon[:1]
+        dist = float(_haversine(inv.lat[k], inv.lon[k], lat[0], lon[0]))
+        if dist <= 300.0:
+            found.append((dist, inv))
+    return sorted(found, key=lambda f: f[0])
+
+
 def _merge(early, late, source):
     """`late` with the fixes of `early` that precede its first fix put in front."""
     keep = early._t < late._t[0]
@@ -236,49 +288,26 @@ def _merge(early, late, source):
         mslp=np.concatenate([early.mslp[keep], late.mslp]),
         kind=[k for k, w in zip(early.kind, keep) if w] + list(late.kind),
         name=late.name, transitioned_from=late.transitioned_from, transitioned_to=late.transitioned_to,
-        source=source,
+        source=source, precursor=early.storm_id,
     )
 
 
-def with_precursor(track, needed_from, log=print):
-    """Extend an archived named system back in time with the invest it grew out of.
+def with_precursor(track, needed_from, invests=None, log=print):
+    """Extend an archived numbered system back in time with the invest it grew out of.
 
-    The invest is identified by a TRANSITIONED note naming this system if the
-    b-deck has one, otherwise as the invest whose last fixes lie closest to
-    where and when the best track begins (within 12 h and 300 km).
+    `invests` is the result of load_archive_invests(); it is fetched if not given.
     """
     if track.is_invest or track.first <= needed_from:
         return track
-    start_s = track._t[0]
-    best = None          # (score, invest track)
-    for iid in list_archive_invests(track.year, track.storm_id[:2]):
-        try:
-            raw = _get(f"{config.ATCF_URL}/archive/{track.year}/invests/b{iid}.dat.gz")
-            inv = parse_bdeck(gzip.decompress(raw).decode("latin-1"), iid)
-        except Exception:
-            continue
-        if inv._t[0] >= start_s or inv._t[-1] > start_s + 48 * 3600:
-            continue                                   # nothing earlier to add, or it outlived the start by days
-        if inv.transitioned_to == track.storm_id.lower() or track.transitioned_from == iid.lower():
-            best = (-1.0, inv)
-            break
-        k = int(np.argmin(np.abs(inv._t - start_s)))    # invest fix nearest the start of the best track
-        gap_h = abs(float(inv._t[k] - start_s)) / 3600.0
-        if gap_h > 12:
-            continue
-        when = np.array([inv._t[k]], dtype="int64").astype("datetime64[s]")
-        lat, lon, _ = track.centre(when)
-        if not np.isfinite(lat[0]):                     # invest ends before the best track starts
-            lat, lon = track.lat[:1], track.lon[:1]
-        dist = float(_haversine(inv.lat[k], inv.lon[k], lat[0], lon[0]))
-        if dist <= 300.0 and (best is None or dist < best[0]):
-            best = (dist, inv)
-    if best is None:
-        log(f"  {track.storm_id}: no archived invest matches the start of the best track; "
+    if invests is None:
+        invests = load_archive_invests(track.year, track.storm_id[:2])
+    usable = [(score, inv) for score, inv in find_precursors(track, invests) if inv._t[0] < track._t[0]]
+    if not usable:
+        log(f"  {track.storm_id}: no archived invest matches the start of its track; "
             f"positions begin {track.first:%Y-%m-%d %HZ}")
         return track
-    score, inv = best
-    how = "TRANSITIONED note" if score < 0 else f"{score:.0f} km from the first best-track position"
+    score, inv = usable[0]
+    how = "TRANSITIONED note" if score < 0 else f"{score:.0f} km from the first position"
     merged = _merge(inv, track, f"Positions before {track.first:%d %b %HZ} are from invest {inv.storm_id} in the NHC invest archive.")
     log(f"  {track.storm_id}: joined invest {inv.storm_id} ({how}); positions now begin {merged.first:%Y-%m-%d %HZ}")
     return merged

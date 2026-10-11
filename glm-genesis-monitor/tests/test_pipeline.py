@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from pipeline import atcf, config, glm, process, run_archive, run_realtime
+from pipeline import atcf, collect, config, glm, process, run_archive, run_realtime, run_season
 from pipeline.geo import haversine, lattice_index
 from tests.fake_noaa import FakeNOAA, bdeck_text, lcfa_bytes, quantize_area, quantize_energy
 
@@ -412,3 +412,84 @@ def test_archive_uses_combined_best_track_file(world, monkeypatch):
     assert prod["genesis"] == "2021-08-26T18:00Z" and prod["steps"]["n"] == 72 * 12
     assert prod["label"] == "Ida (AL09)" and "combined invest and best-track file" in prod["note"]
     assert prod["steps"]["clon"][0] == pytest.approx(-72.4) and prod["steps"]["clat"][0] == pytest.approx(13.2)
+
+
+def test_season_backfill(world, monkeypatch):
+    """A season is every numbered system plus every invest that did not become one."""
+    noaa, tmp = world
+    gen = dt("2024-08-10T12:00")
+    line = lambda k: (10.0 + 0.1 * k, -40.0 - 1.5 * k)
+    six_h = lambda t0, n, lat, lon, kind="DB": [(t0 + timedelta(hours=6 * k), lat, lon - 0.5 * k, 25, 1009, kind) for k in range(n)]
+    noaa.archive["2024/bal052024.dat.gz"] = bdeck_text("al", "05", [(gen - timedelta(hours=6), *line(10), 30, 1007, "TD"),
+                                                                    (gen, *line(11), 35, 1005, "TS")], name="ERNESTO")
+    grew = [(gen - timedelta(hours=6 * (11 - k)), *line(k), 20, 1010, "DB") for k in range(7, 11)]    # -24 h to -6 h
+    noaa.archive["2024/invests/balB32024.dat.gz"] = bdeck_text("al", "B3", grew)
+    noaa.archive["2024/bal062024.dat.gz"] = bdeck_text("al", "06", six_h(dt("2024-09-01T00:00"), 3, 25.0, -60.0, "TD"), name="SIX")
+    noaa.archive["2024/invests/balA12024.dat.gz"] = bdeck_text("al", "A1", six_h(dt("2024-07-01T00:00"), 4, 12.0, -30.0))
+    noaa.archive["2024/invests/balE22024.dat.gz"] = bdeck_text("al", "E2", six_h(dt("2024-07-20T00:00"), 2, 12.0, -30.0))
+    # an Atlantic invest that crossed into the East Pacific and was numbered there
+    gen2 = dt("2024-06-20T00:00")
+    noaa.archive["2024/bep012024.dat.gz"] = bdeck_text("ep", "01", [(gen2 - timedelta(hours=6), 12.0, -92.0, 30, 1007, "TD"),
+                                                                    (gen2, 12.2, -93.0, 35, 1005, "TS")], name="ALETTA")
+    noaa.archive["2024/invests/balF42024.dat.gz"] = bdeck_text("al", "F4", six_h(gen2 - timedelta(hours=24), 4, 11.9, -88.9))
+    noaa.archive["2024/aal052024.dat.gz"] = "not a best track"
+
+    now = dt("2026-10-11T12:00")
+    cases = {c["id"]: c for c in run_season.run(2024, "al", dry_run=True, now=now)}
+    assert sorted(cases) == ["al052024", "al062024", "alA12024", "alB32024", "alE22024", "alF42024"]
+    assert cases["al052024"]["outcome"] == "developed" and cases["al052024"]["precursor"] == "alB32024"
+    assert cases["al052024"]["hours"] == 24 and cases["al052024"]["label"] == "Ernesto (AL05)"
+    assert cases["al062024"]["outcome"] == "nondeveloper" and cases["al062024"]["hours"] == 12
+    assert cases["alA12024"]["status"] == "pending" and cases["alA12024"]["label"] == "Invest 91L"
+    assert cases["alB32024"]["reason"] == "became al052024" and cases["alF42024"]["reason"] == "became ep012024"
+    assert cases["alE22024"]["status"] == "skipped" and "shorter" in cases["alE22024"]["reason"]
+    plan = json.loads((tmp / "data/backfill/2024-al.json").read_text())
+    assert plan["counts"] == {"pending": 3, "skipped": 3} and not (tmp / "data/storms").exists()
+
+    # one case failing does not stop the others, and the plan records why
+    real_run = run_archive.run
+    def flaky(sid, **kw):
+        if sid == "al062024":
+            raise RuntimeError("bucket unreachable")
+        return real_run(sid, **kw)
+    monkeypatch.setattr(run_archive, "run", flaky)
+    cases = {c["id"]: c for c in run_season.run(2024, "al", now=now)}
+    assert cases["al062024"]["status"] == "failed" and "bucket unreachable" in cases["al062024"]["reason"]
+    assert cases["al052024"]["status"] == "done" and cases["al052024"]["n_steps"] == 24 * 12
+    assert sorted(e["id"] for e in load(tmp)["storms"]) == ["al052024", "alA12024"]
+    assert "alB32024" in load(tmp, "al052024")["note"]
+
+    # a second run only does what is missing
+    ran = []
+    monkeypatch.setattr(run_archive, "run", lambda sid, **kw: ran.append(sid) or real_run(sid, **kw))
+    cases = {c["id"]: c for c in run_season.run(2024, "al", now=now)}
+    assert ran == ["al062024"] and cases["al052024"]["reason"] == "already in the archive"
+    assert json.loads((tmp / "data/backfill/2024-al.json").read_text())["counts"] == {"done": 3, "skipped": 3}
+    assert load(tmp, "al062024")["outcome"] == "nondeveloper" and load(tmp, "al062024")["genesis"] is None
+    assert run_season.run(2024, "al", max_hours=0, redo=True, now=now)[0]["status"] == "pending"     # out of time: nothing started
+
+    # the other basin is processed into its own folder, as a parallel job would, then collected
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp / "job" / "data"))
+    cases = {c["id"]: c for c in run_season.run(2024, "ep", now=now)}
+    assert list(cases) == ["ep012024"] and cases["ep012024"]["precursor"] == "alF42024" and cases["ep012024"]["hours"] == 24
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp / "data"))
+    assert collect.collect(str(tmp / "job"), now=now, log=lambda m: None) == (1, 1)
+    assert sorted(e["id"] for e in load(tmp)["storms"]) == ["al052024", "al062024", "alA12024", "ep012024"]
+    assert (tmp / "data/backfill/2024-ep.json").exists() and (tmp / "data/backfill/2024-al.json").exists()
+
+
+def test_season_in_progress(world):
+    """The current season is not in NHC's archive yet: numbered systems come from the real-time folder."""
+    noaa, tmp = world
+    now = dt("2026-10-11T12:00")
+    gen = dt("2026-07-04T00:00")
+    noaa.btk["bal012026.dat"] = bdeck_text("al", "01", [(gen - timedelta(hours=6 * k), 15.0, -50.0 + k, 25 if k else 35, 1008, "DB" if k else "TS")
+                                                        for k in range(8, -1, -1)], name="ARTHUR")
+    noaa.btk["bal102026.dat"] = bdeck_text("al", "10", [(now - timedelta(hours=18), 12.0, -40.0, 30, 1007, "TD"),
+                                                        (now - timedelta(hours=12), 12.2, -41.0, 30, 1007, "TD")], name="TEN")
+    noaa.btk["bal932026.dat"] = bdeck_text("al", "93", [(now - timedelta(hours=12), 9.0, -30.0, 20, 1010, "DB"),
+                                                        (now - timedelta(hours=6), 9.0, -31.0, 20, 1010, "DB")])
+    cases = {c["id"]: c for c in run_season.run(2026, "al", dry_run=True, now=now)}
+    assert sorted(cases) == ["al012026", "al102026"]                      # live invests belong to the hourly run
+    assert cases["al012026"]["status"] == "pending" and cases["al012026"]["hours"] == 48
+    assert cases["al102026"]["status"] == "skipped" and "hourly run" in cases["al102026"]["reason"]
