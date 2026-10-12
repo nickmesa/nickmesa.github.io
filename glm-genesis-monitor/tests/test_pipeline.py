@@ -10,8 +10,9 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from pipeline import atcf, collect, config, glm, process, run_archive, run_realtime, run_season
-from pipeline.geo import haversine, lattice_index
+from pipeline import abi, atcf, collect, config, env, era5, glm, process, remote, run_archive, run_env, run_realtime, run_season
+from pipeline.geo import centred_grid, destination, haversine, lattice_index, offsets_km
+from tests import fake_noaa
 from tests.fake_noaa import FakeNOAA, bdeck_text, lcfa_bytes, quantize_area, quantize_energy
 
 UTC = timezone.utc
@@ -528,3 +529,205 @@ def test_season_in_progress(world):
     assert sorted(cases) == ["al012026", "al102026"]                      # live invests belong to the hourly run
     assert cases["al012026"]["status"] == "pending" and cases["al012026"]["hours"] == 48
     assert cases["al102026"]["status"] == "skipped" and "hourly run" in cases["al102026"]["reason"]
+
+
+# ------------------------------------------------- IR and vorticity -------
+def test_navigation_and_grid():
+    # the worked example in the GOES-R Product User Guide (GOES-East at 75.0 W)
+    x, y, visible = abi.scan_angles(np.array([33.846162]), np.array([-84.690932]), -75.0, 35786023.0, 6378137.0, 6356752.31414)
+    assert x[0] == pytest.approx(-0.024052, abs=1e-6) and y[0] == pytest.approx(0.095340, abs=1e-6) and visible[0]
+    assert not abi.scan_angles(np.array([10.0]), np.array([30.0]), -75.0, 35786023.0, 6378137.0, 6356752.31414)[2][0]   # other side of the Earth
+    # the image grid is the inverse of the feature offsets: row 0 north, column 0 west
+    gx, gy = centred_grid(384.0, 4.0)
+    assert gx.shape == (192, 192) and gx[0, 0] == -382.0 and gy[0, 0] == 382.0 and gy[-1, 0] == -382.0
+    lat, lon = destination(15.0, -50.0, gx, gy)
+    bx, by, _ = offsets_km(15.0, -50.0, lat, lon)
+    assert np.abs(bx - gx).max() < 1e-6 and np.abs(by - gy).max() < 1e-6
+    assert lat[0, 0] > 15.0 and lon[0, 0] < -50.0
+    # satellites: the one used for the lightning first, the other position only where it sees the storm
+    assert abi.buckets_for(dt("2022-09-21T00:00"), -50.0) == ["noaa-goes16"]
+    assert abi.buckets_for(dt("2022-09-21T00:00"), -100.0) == ["noaa-goes16", "noaa-goes17"]
+    assert abi.buckets_for(dt("2022-09-21T00:00"), -115.0) == ["noaa-goes17", "noaa-goes16"]
+    assert abi.buckets_for(dt("2026-07-16T00:00"), -140.0) == ["noaa-goes18"]
+
+
+def record(key, start, hours, lat, lon, dlon_per_h=0.0):
+    """A minimal archive record: only what the IR and vorticity step reads."""
+    n = hours * 12
+    return {"id": key, "label": key, "steps": {"t0": int(start.timestamp()), "dt": 300, "n": n, "clat": [lat] * n,
+                                              "clon": [lon + dlon_per_h * k / 12 for k in range(n)]}}
+
+
+def linear_vo(h, level, lat, lon):
+    """Vorticity (s-1) that differs by level and hour and is linear in space, so interpolation is exact."""
+    west = np.where(lon > 180, lon - 360, lon)
+    return 1e-5 * (level / 100.0 + h + 0.5 * (lat - 15.0) + 0.25 * (west + 50.0))
+
+
+def put_scans(noaa, sat, first, count, tb_of, bad_of=None, skip=()):
+    body = fake_noaa.abi_bytes(sat, tb_of, bad_of)
+    for k in range(count):
+        t = first + timedelta(minutes=10 * k)
+        if t not in skip:
+            noaa.objects.setdefault(f"noaa-goes{sat}", {})[fake_noaa.abi_key(sat, t)] = body
+            noaa.objects[f"noaa-goes{sat}"][fake_noaa.abi_key(sat, t, channel=2)] = b"another channel"
+    return len(body)
+
+
+@pytest.fixture()
+def envworld(world, monkeypatch):
+    noaa, tmp = world
+    monkeypatch.setattr(config, "ERA5_URL", config.GLM_URL.format(bucket="nsf-ncar-era5"))
+    monkeypatch.setattr(config, "ENV_DIR", str(tmp / "env"))
+    monkeypatch.setattr(config, "ENV_WORKERS", 0)
+    monkeypatch.setattr(config, "ERA5_WORKERS", 0)
+    era5._HELD.clear()
+    return noaa, tmp
+
+
+def test_ir_and_vorticity(envworld):
+    from PIL import Image
+    noaa, tmp = envworld
+    start = dt("2022-09-21T00:00")
+    clat, clon = 15.0, -50.0
+    blat, blon = destination(clat, clon, 60.0, 80.0)                       # a cold cloud shield 100 km across, to the north-east
+    cold = lambda la, lo: np.where(haversine(float(blat), float(blon), la, lo) <= 100.0, 200.0, 295.0)
+    flagged = lambda la, lo: (la < clat - 2.5) & (lo < clon - 2.5)         # bad pixels in the south-west corner
+    size = put_scans(noaa, "16", start - timedelta(minutes=30), 16, cold, flagged, skip={start + timedelta(minutes=50)})
+    noaa.objects.setdefault("nsf-ncar-era5", {})[fake_noaa.era5_key(start)] = fake_noaa.era5_bytes(start, linear_vo)
+
+    prod = record("al092022", start, 2, clat, clon)
+    summary = env.build(prod, log=lambda m: None, now=dt("2026-10-11T12:00"))
+    doc = json.loads((tmp / "env/al092022.json").read_text())
+
+    # scans: the last one at or before the start, then every one up to the end, less the missing 00:50
+    ir = doc["ir"]
+    want = [start + timedelta(minutes=m) for m in (0, 10, 20, 30, 40, 60, 70, 80, 90, 100, 110, 120)]
+    assert ir["t"] == [int(t.timestamp()) for t in want] and set(ir["sat"]) == {16}
+    assert summary["frames"] == 12 and summary["error"] == "" and summary["sheets"] == 1 and ir["sheets"] == ["al092022_0.webp"]
+    assert ir["px"] == 192 and ir["cols"] == 8 and ir["tb_max"] == 330.0 and ir["tb_step"] == 0.6
+
+    # only the part of each file around the storm is read
+    key = fake_noaa.abi_key("16", start)
+    assert noaa.ranged[key] < 0.7 * size and not any("C02" in k for k in noaa.ranged) and not noaa.gets
+    assert summary["abi_requests"] <= 6 * 12                                # a handful of range requests per scan
+    assert summary["abi_chunks"] == [113, 113]
+
+    # the image: cold = bright, north up, east right; bad pixels are stored as 0
+    sheet = np.asarray(Image.open(tmp / "env/al092022_0.webp").convert("L")).astype(int)
+    assert sheet.shape == (2 * 192, 8 * 192)
+    frame = sheet[0:192, 192:384]                                          # second frame of the first row
+    px = lambda x, y: frame[int(round((382.0 - y) / 4.0)), int(round((x + 382.0) / 4.0))]
+    assert px(60, 80) == pytest.approx((330 - 200) / 0.6, abs=8)           # inside the cloud shield
+    assert px(-60, -80) == pytest.approx((330 - 295) / 0.6, abs=8) and px(60, -80) == pytest.approx(58, abs=8)
+    assert px(-370, -370) < 12 and min(ir["valid"]) < 1.0 and min(ir["valid"]) > 0.97
+    assert sheet[192:, 4 * 192:].max() < 12                                # unused cells of the sheet
+
+    # cold cloud fraction within 200 km: a 100 km disc lying wholly inside the circle
+    ccf = doc["ccf"]
+    assert ccf["thresholds"] == list(config.CCF_THRESHOLDS_K) and ccf["radius_km"] == 200.0
+    assert ccf["frac"]["208"][3] == pytest.approx(0.25, abs=0.03) and ccf["frac"]["195"][3] == 0.0
+    assert ccf["frac"]["240"] == ccf["frac"]["208"] and len(ccf["frac"]["208"]) == 12
+
+    # vorticity: three hours; layer means of the levels inside 900-700 and 600-400 hPa
+    v = doc["vort"]
+    assert v["n"] == 3 and v["have"] == [1, 1, 1] and v["t0"] == int(start.timestamp()) and v["px"] == 33
+    assert v["levels"] == {"low": [700.0, 850.0, 900.0], "mid": [400.0, 500.0, 600.0]}
+    low0, mid0 = (7 + 8.5 + 9) / 3, (4 + 5 + 6) / 3
+    assert v["mean_low"] == pytest.approx([low0, low0 + 1, low0 + 2], abs=0.05)       # 1e-5 s-1; the field is symmetric about the centre
+    assert v["mean_mid"] == pytest.approx([mid0, mid0 + 1, mid0 + 2], abs=0.05)
+    grid = np.frombuffer(__import__("base64").b64decode(v["low"]), dtype=np.int8).reshape(3, 33, 33) * v["unit"] / 1e-5
+    assert grid[0, 16, 16] == pytest.approx(low0, abs=0.26)                  # centre
+    assert grid[1, 16, 16] - grid[0, 16, 16] == pytest.approx(1.0, abs=0.3)
+    north = 0.5 * 384.0 / 111.2                                             # the field rises 0.5 per degree of latitude
+    assert grid[0, 0, 16] - grid[0, 16, 16] == pytest.approx(north, abs=0.3) and grid[0, 32, 16] < grid[0, 16, 16]
+    assert grid[0, 16, 32] > grid[0, 16, 0]                                  # and towards the east
+    assert summary["vort_hours"] == 3 and not summary["era5_pending"] and summary["era5_chunks"] == [1, 8, 91, 180]
+    assert v["unit"] == config.VORT_UNIT
+
+    # a record with stronger vorticity than 127 counts can hold is stored with a coarser step, not clipped
+    strong = [dict(low=np.full((33, 33), 90.0, np.float32), mid=np.zeros((33, 33), np.float32), mean_low=90.0, mean_mid=0.0)]
+    centre = env.Centre(record("alZ92022", start, 1, clat, clon))
+    wide, _ = env.write("alZ92022", centre, [], [start], strong, dt("2026-10-11T12:00"))
+    stored = np.frombuffer(__import__("base64").b64decode(wide["vort"]["low"]), dtype=np.int8)
+    assert wide["vort"]["unit"] == pytest.approx(0.75e-5) and stored[0] * wide["vort"]["unit"] / 1e-5 == pytest.approx(90.0)
+
+    # a later day that NCAR has not published: IR only, and the record says so
+    late = record("al102026", dt("2026-09-30T00:00"), 1, clat, clon)
+    put_scans(noaa, "19", dt("2026-09-30T00:00"), 7, cold)
+    summary = env.build(late, log=lambda m: None)
+    doc = json.loads((tmp / "env/al102026.json").read_text())
+    assert summary["frames"] == 7 and summary["vort_hours"] == 0 and summary["era5_pending"] and summary["error"] == ""
+    assert doc["vort"]["have"] == [0, 0] and doc["vort"]["low"] == "" and doc["vort"]["mean_low"] == [None, None]
+
+
+def test_ir_from_the_other_satellite(envworld):
+    """A scan that is mostly bad on the usual satellite is taken from the other position."""
+    noaa, tmp = envworld
+    start = dt("2022-08-01T00:00")
+    warm = lambda la, lo: 290.0 + 0 * la
+    put_scans(noaa, "17", start, 7, warm, bad_of=lambda la, lo: la > -90)      # GOES-17: every pixel flagged
+    put_scans(noaa, "16", start, 4, warm)                                       # GOES-16 has the first four scans
+    summary = env.build(record("ep072022", start, 1, 14.0, -115.0), log=lambda m: None)
+    doc = json.loads((tmp / "env/ep072022.json").read_text())
+    assert doc["ir"]["sat"] == [16, 16, 16, 16, 17, 17, 17] and summary["sats"] == [16, 17]
+    assert doc["ir"]["valid"][:4] == [1.0] * 4 and doc["ir"]["valid"][4:] == [0.0] * 3
+    assert doc["ccf"]["frac"]["208"] == [0.0] * 4 + [None] * 3                  # no fraction from a scan with too few good pixels
+
+
+def test_env_runner(envworld, monkeypatch):
+    noaa, tmp = envworld
+    start = dt("2022-09-21T00:00")
+    put_scans(noaa, "16", start, 7, lambda la, lo: 280.0 + 0 * la)
+    noaa.objects.setdefault("nsf-ncar-era5", {})[fake_noaa.era5_key(start)] = fake_noaa.era5_bytes(start, linear_vo)
+    data = tmp / "data" / "storms"
+    data.mkdir(parents=True)
+    entries = []
+    for key, basin, year in (("al092022", "AL", 2022), ("alA02022", "AL", 2022), ("ep012022", "EP", 2022), ("al012023", "AL", 2023)):
+        (data / f"{key}.json").write_text(json.dumps(record(key, start, 1, 15.0, -50.0)))
+        entries.append({"id": key, "basin": basin, "year": year, "status": "ended"})
+    entries.append({"id": "al932022_0901", "basin": "AL", "year": 2022, "status": "active"})
+    (tmp / "data/index.json").write_text(json.dumps({"storms": entries}))
+    assert run_env.archived(2022, "al") == ["al092022", "alA02022"]
+
+    # a parallel job writes to its own folder, in worker processes
+    monkeypatch.setattr(config, "ENV_DIR", str(tmp / "job" / "env"))
+    monkeypatch.setattr(config, "ENV_WORKERS", 2)
+    monkeypatch.setattr(config, "ERA5_WORKERS", 1)
+    (data / "alA02022.json").write_text("{ not json")
+    index = run_env.run(run_env.archived(2022, "al"))
+    env._close_pools()
+    assert index["cases"]["al092022"]["frames"] == 7 and index["cases"]["al092022"]["vort_hours"] == 2
+    assert "JSONDecodeError" in index["cases"]["alA02022"]["error"] and index["cases"]["alA02022"]["frames"] == 0
+
+    # done cases are skipped; failed ones are tried again
+    built = []
+    monkeypatch.setattr(env, "build", lambda product, **kw: built.append(product["id"]) or {"frames": 1, "hours": 2, "vort_hours": 0, "error": "", "updated": "2099"})
+    (data / "alA02022.json").write_text(json.dumps(record("alA02022", start, 1, 15.0, -50.0)))
+    run_env.run(run_env.archived(2022, "al"))
+    assert built == ["alA02022"]
+    run_env.run(run_env.archived(2022, "al"), fill=True)                      # --fill: also those still missing ERA5 hours
+    assert built == ["alA02022", "alA02022"]
+
+    # the collect step adds finished cases to the published folder and keeps one index
+    monkeypatch.setattr(config, "ENV_DIR", str(tmp / "env"))
+    assert run_env.merge(str(tmp / "job"), log=lambda m: None) == 1
+    published = run_env.load_index()
+    assert sorted(published["cases"]) == ["al092022", "alA02022"] and published["cases"]["al092022"]["frames"] == 7
+    assert sorted(p.name for p in (tmp / "env").iterdir()) == ["al092022.json", "al092022_0.webp", "index.json"]
+
+
+def test_range_file(world):
+    noaa, tmp = world
+    body = bytes(range(256)) * 4096                                             # 1 MB
+    noaa.objects["noaa-goes16"] = {"blob": body}
+    f = remote.RangeFile(config.GLM_URL.format(bucket="noaa-goes16") + "/blob", block=4096)
+    assert f.size == len(body) and f.requests == 1
+    f.seek(100)
+    assert f.read(50) == body[100:150] and f.requests == 1                      # inside the first block
+    f.seek(10000)
+    assert f.read(9000) == body[10000:19000] and f.requests == 2                # three blocks, one request
+    f.seek(-10, 2)
+    assert f.read(100) == body[-10:] and f.tell() == len(body)
+    with pytest.raises(FileNotFoundError):
+        remote.RangeFile(config.GLM_URL.format(bucket="noaa-goes16") + "/nothing")

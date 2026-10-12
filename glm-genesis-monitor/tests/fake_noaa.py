@@ -68,6 +68,106 @@ def lcfa_key(sat, start):
             f"OR_GLM-L2-LCFA_G{sat}_s{stamp(start)}_e{stamp(end)}_c{stamp(end + timedelta(seconds=2))}.nc")
 
 
+# ------------------------------------------------------------- ABI L1b -----
+ABI_N = 1356                         # a coarse "full disk": 224 microradian pixels, about 8 km at nadir
+ABI_DX = 224e-6
+ABI_H, ABI_REQ, ABI_RPOL = 35786023.0, 6378137.0, 6356752.31414
+PLANCK = dict(planck_fk1=10803.3, planck_fk2=1392.74, planck_bc1=0.0755, planck_bc2=0.99975)   # GOES-16 channel 13
+RAD_SCALE, RAD_OFFSET, RAD_FILL = 0.04572892, -1.6443, 4095
+SAT_LON = {"16": -75.0, "19": -75.2, "17": -137.0, "18": -137.0}
+
+
+def abi_latlon(lon0):
+    """Latitude and longitude of every pixel of the fake full disk (GOES-R PUG, scan angle to Earth)."""
+    x = (np.arange(ABI_N) - (ABI_N - 1) / 2) * ABI_DX
+    y = ((ABI_N - 1) / 2 - np.arange(ABI_N)) * ABI_DX
+    x, y = np.meshgrid(x, y)
+    H = ABI_H + ABI_REQ
+    a = np.sin(x) ** 2 + np.cos(x) ** 2 * (np.cos(y) ** 2 + (ABI_REQ / ABI_RPOL) ** 2 * np.sin(y) ** 2)
+    b = -2 * H * np.cos(x) * np.cos(y)
+    with np.errstate(invalid="ignore"):
+        rs = (-b - np.sqrt(b ** 2 - 4 * a * (H ** 2 - ABI_REQ ** 2))) / (2 * a)
+        sx, sy, sz = rs * np.cos(x) * np.cos(y), -rs * np.sin(x), rs * np.cos(x) * np.sin(y)
+        lat = np.degrees(np.arctan((ABI_REQ / ABI_RPOL) ** 2 * sz / np.sqrt((H - sx) ** 2 + sy ** 2)))
+        lon = lon0 - np.degrees(np.arctan(sy / (H - sx)))
+    return lat, lon                                  # NaN off the Earth
+
+
+def abi_bytes(sat, tb_of, bad_of=None):
+    """A channel 13 L1b full-disk file. tb_of(lat, lon) gives brightness temperature (K); bad_of flags pixels."""
+    lat, lon = abi_latlon(SAT_LON[sat])
+    on_earth = np.isfinite(lat)
+    tb = np.where(on_earth, tb_of(np.nan_to_num(lat), np.nan_to_num(lon)), np.nan)
+    tb = tb + np.random.default_rng(13).uniform(-0.5, 0.5, tb.shape)      # texture, so the file does not compress to nothing
+    with np.errstate(invalid="ignore"):
+        rad = PLANCK["planck_fk1"] / (np.exp(PLANCK["planck_fk2"] / (PLANCK["planck_bc1"] + PLANCK["planck_bc2"] * tb)) - 1.0)
+    raw = np.where(on_earth, np.rint((rad - RAD_OFFSET) / RAD_SCALE), RAD_FILL).astype(np.int16)
+    ds = netCDF4.Dataset("fake.nc", mode="w", memory=4096)
+    ds.createDimension("y", ABI_N)
+    ds.createDimension("x", ABI_N)
+    v = ds.createVariable("Rad", "i2", ("y", "x"), zlib=True, chunksizes=(113, 113), fill_value=RAD_FILL)
+    v.set_auto_maskandscale(False)
+    v.setncattr("_Unsigned", "true")
+    v.scale_factor, v.add_offset, v.units = np.float32(RAD_SCALE), np.float32(RAD_OFFSET), "mW m-2 sr-1 (cm-1)-1"
+    v[:] = raw
+    v = ds.createVariable("DQF", "i1", ("y", "x"), zlib=True, chunksizes=(113, 113), fill_value=-1)
+    v.set_auto_maskandscale(False)
+    v.setncattr("_Unsigned", "true")
+    dqf = np.where(on_earth, 0, -1).astype(np.int8)
+    if bad_of is not None:
+        dqf[on_earth & bad_of(np.nan_to_num(lat), np.nan_to_num(lon))] = 1
+    v[:] = dqf
+    for name, scale, offset in (("x", ABI_DX, -(ABI_N - 1) / 2 * ABI_DX), ("y", -ABI_DX, (ABI_N - 1) / 2 * ABI_DX)):
+        v = ds.createVariable(name, "i2", (name,))
+        v.set_auto_maskandscale(False)
+        v.scale_factor, v.add_offset, v.units = np.float32(scale), np.float32(offset), "rad"
+        v[:] = np.arange(ABI_N, dtype=np.int16)
+    v = ds.createVariable("goes_imager_projection", "i4")
+    v.perspective_point_height, v.semi_major_axis, v.semi_minor_axis = ABI_H, ABI_REQ, ABI_RPOL
+    v.longitude_of_projection_origin, v.sweep_angle_axis = SAT_LON[sat], "x"
+    for name, value in PLANCK.items():
+        ds.createVariable(name, "f8")[...] = value
+    return bytes(ds.close())
+
+
+def abi_key(sat, start, channel=13):
+    stamp = lambda t: t.strftime("%Y%j%H%M%S") + "0"
+    end = start + timedelta(minutes=9, seconds=50)
+    return (f"ABI-L1b-RadF/{start:%Y}/{start:%j}/{start:%H}/"
+            f"OR_ABI-L1b-RadF-M6C{channel:02d}_G{sat}_s{stamp(start)}_e{stamp(end)}_c{stamp(end + timedelta(seconds=8))}.nc")
+
+
+# ---------------------------------------------------------------- ERA5 -----
+ERA5_LEVELS = [300.0, 400.0, 500.0, 600.0, 700.0, 850.0, 900.0, 1000.0]
+ERA5_RES = 2.0
+
+
+def era5_bytes(day, vo_of):
+    """A day of 'e5.oper.an.pl' vorticity. vo_of(hour, level, lat, lon) gives s-1 on a 2 degree grid (lon 0-358)."""
+    lat = np.arange(90.0, -90.0 - 1e-6, -ERA5_RES)
+    lon = np.arange(0.0, 360.0, ERA5_RES)
+    ds = netCDF4.Dataset("fake.nc", mode="w", memory=4096)
+    ds.createDimension("time", None)
+    for name, values in (("level", ERA5_LEVELS), ("latitude", lat), ("longitude", lon)):
+        ds.createDimension(name, len(values))
+        ds.createVariable(name, "f8", (name,))[:] = values
+    t = ds.createVariable("time", "i4", ("time",))
+    t.units = "hours since 1900-01-01 00:00:00"
+    base = int((day - day.replace(year=1900, month=1, day=1, hour=0)).total_seconds() // 3600)
+    t[:] = base + np.arange(24)
+    v = ds.createVariable("VO", "f4", ("time", "level", "latitude", "longitude"), zlib=True,
+                          chunksizes=(1, len(ERA5_LEVELS), len(lat), len(lon)), fill_value=9.999e20)
+    glon, glat = np.meshgrid(lon, lat)
+    for h in range(24):
+        v[h] = np.stack([vo_of(h, lev, glat, glon) for lev in ERA5_LEVELS]).astype("f4")
+    return bytes(ds.close())
+
+
+def era5_key(day):
+    stamp = f"{day:%Y%m%d}"
+    return f"e5.oper.an.pl/{day:%Y%m}/e5.oper.an.pl.128_138_vo.ll025sc.{stamp}00_{stamp}23.nc"
+
+
 def bdeck_text(basin, number, fixes, name="INVEST"):
     """fixes: [(datetime, lat, lon, vmax, mslp, type)] -> b-deck text in ATCF layout."""
     lines = []
@@ -91,6 +191,7 @@ class FakeNOAA:
         self.archive = {}        # '2024/bal022024.dat.gz' or '2024/invests/balA62024.dat.gz' -> text
         self.objects = {}        # bucket -> {key: bytes}
         self.gets = []           # keys of GLM files downloaded
+        self.ranged = {}         # key -> bytes served to range requests
         self.lists = 0
         self.page_size = 100     # small, so listing pagination is exercised
         self._server = None
@@ -155,6 +256,18 @@ class FakeNOAA:
                     return self._send((xml + "</ListBucketResult>").encode(), "application/xml")
                 key = "/".join(parts[1:])
                 if key in objects:
+                    m = re.fullmatch(r"bytes=(\d+)-(\d+)", self.headers.get("Range", ""))
+                    if m:                    # S3 answers a range request with 206 and Content-Range
+                        body, lo, hi = objects[key], int(m.group(1)), int(m.group(2))
+                        if lo >= len(body):
+                            return self._send(b"", code=416)
+                        part = body[lo:hi + 1]
+                        store.ranged[key] = store.ranged.get(key, 0) + len(part)
+                        self.send_response(206)
+                        self.send_header("Content-Range", f"bytes {lo}-{lo + len(part) - 1}/{len(body)}")
+                        self.send_header("Content-Length", str(len(part)))
+                        self.end_headers()
+                        return self.wfile.write(part)
                     store.gets.append(key)
                     return self._send(objects[key])
                 return self._send(b"not found", "text/plain", 404)

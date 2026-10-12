@@ -111,6 +111,59 @@ def build(key, track, start, end, status, outcome, genesis, rng, activity, trend
     return product
 
 
+def fake_environment(product, rng):
+    """Made-up IR frames and vorticity for one record, written with the real writer.
+
+    Cold cloud tops are placed where the record's lightning features are, under
+    a broader shield; the vorticity is a low-level vortex that strengthens with
+    a mid-level one drifting over it.
+    """
+    from scipy.ndimage import gaussian_filter
+    from pipeline import env, run_env
+    from pipeline.geo import centred_grid
+
+    centre = env.Centre(product)
+    gx, gy = centred_grid(config.IR_HALF_KM, config.IR_RES_KM)
+    f = product["features"]
+    fk, fx, fy, fn = (np.asarray(f[k], dtype=float) for k in ("k", "x", "y", "n"))
+    within = np.hypot(gx, gy) <= config.RADIUS_KM
+    texture = gaussian_filter(rng.normal(size=(8, gx.shape[0], gx.shape[1])), (0, 6, 6)) * 40
+    frames = []
+    for t in range(centre.start, centre.end + 1, 600):
+        frac = (t - centre.start) / max(1, centre.end - centre.start)
+        k = (t - centre.start) / 300.0
+        near = (fk <= k) & (fk > k - 9)
+        tops = np.zeros_like(gx)
+        col = np.clip(np.rint((fx[near] + config.IR_HALF_KM) / config.IR_RES_KM), 0, gx.shape[1] - 1).astype(int)
+        row = np.clip(np.rint((config.IR_HALF_KM - fy[near]) / config.IR_RES_KM), 0, gx.shape[0] - 1).astype(int)
+        np.add.at(tops, (row, col), np.log10(fn[near] + 10))
+        shield = 78 * (1 - np.exp(-gaussian_filter(tops, 9) * 260)) + 24 * (1 - np.exp(-gaussian_filter(tops, 3) * 45))
+        drift = texture[int(frac * 7)] * (1 - frac * 7 % 1) + texture[min(7, int(frac * 7) + 1)] * (frac * 7 % 1)
+        tb = np.clip(292 + drift * (1 - shield / 110) - shield, 188, 300).astype(np.float32)
+        image = np.clip(np.rint((config.IR_TB_MAX - tb) / config.IR_TB_STEP), 0, 255).astype(np.uint8)
+        frames.append({"t": t, "sat": product["steps"]["sat"][0][1] if product["steps"]["sat"] else 19, "valid": 1.0, "image": image.tobytes(),
+                       "ccf": [round(float((tb[within] <= thr).sum()) / int(within.sum()), 4) for thr in config.CCF_THRESHOLDS_K]})
+    hours = env.hours_of(centre)
+    n = int(round(2 * config.VORT_HALF_KM / config.VORT_RES_KM)) + 1
+    edge = np.linspace(-config.VORT_HALF_KM, config.VORT_HALF_KM, n)
+    vx, vy = np.meshgrid(edge, -edge)
+    inside = np.hypot(vx, vy) <= config.RADIUS_KM
+    samples = []
+    for i, _ in enumerate(hours):
+        frac = i / max(1, len(hours) - 1)
+        bump = lambda x0, y0, amp, size: amp * np.exp(-((vx - x0) ** 2 + (vy - y0) ** 2) / (2 * size ** 2))
+        low = bump(40 * (1 - frac), -20 * (1 - frac), 9 + 26 * frac ** 1.5, 170 - 50 * frac) + bump(-260, 180, 6, 120) - 1.5
+        mid = bump(230 * (1 - frac) ** 1.3, 120 * (1 - frac), 12 + 12 * frac, 150 - 30 * frac) - 1.0
+        samples.append({"low": low, "mid": mid, "mean_low": float(low[inside].mean()), "mean_mid": float(mid[inside].mean())})
+    doc, size = env.write(product["id"], centre, frames, hours, samples, NOW,
+                          {"low": [700.0, 750.0, 775.0, 800.0, 825.0, 850.0, 875.0, 900.0], "mid": [400.0, 450.0, 500.0, 550.0, 600.0]})
+    index = run_env.load_index()
+    index["cases"][product["id"]] = {"frames": len(frames), "hours": len(hours), "vort_hours": len(hours), "kb": round(size / 1e3), "error": ""}
+    index["demo"] = True
+    run_env.save_index(index, NOW)
+    print(f"{product['id']:16s} environment: {len(frames)} IR frames, {len(hours)} vorticity hours, {size / 1e6:.2f} MB")
+
+
 def main():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out = os.path.join(os.path.dirname(here), "lightning", "demo")
@@ -151,6 +204,8 @@ def main():
         print(f"{p['id']:16s} {p['label']:18s} steps {p['steps']['n']:5d}  features {len(f['k']):6d} "
               f"(sea {entry['n_features']})  groups {entry['n_groups']:8d}  {size:.2f} MB")
     process.save_index(index, NOW)
+    config.ENV_DIR = os.path.join(out, "env")
+    fake_environment(products[2], rng)                 # the archived developer
 
 
 if __name__ == "__main__":

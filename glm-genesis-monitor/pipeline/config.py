@@ -51,6 +51,35 @@ CACHE_HALF_DEG = 4.0       # half-width of the gridded cells kept on disk
 # A cached step is reused while the (possibly revised) centre stays within
 # CACHE_HALF_DEG - TOBAC_HALF_DEG of the centre it was downloaded for.
 
+# ---------------------------------------- environment (archived cases) -----
+# Channel 13 brightness temperature at every full-disk scan and hourly ERA5
+# relative vorticity, on storm-centred grids. The time series follow
+# cold_cloud_fraction() and area_averaged_vort_series() in mesa_functions.py.
+ABI_PRODUCT = "ABI-L1b-RadF"       # radiances converted to brightness temperature, as in Get_ABI.py
+ABI_CHANNEL = 13
+IR_HALF_KM = 384.0                 # half-width of the image
+IR_RES_KM = 4.0                    # 192 x 192 pixels
+IR_TB_MAX = 330.0                  # stored byte = (IR_TB_MAX - Tb) / IR_TB_STEP, so cold tops are bright
+IR_TB_STEP = 0.6
+IR_TB_VALID = (150.0, 350.0)       # outside this range is treated as bad data (QC_abi)
+IR_MAX_BAD = 0.10                  # more bad pixels than this within the radius: no cold cloud fraction
+IR_SHEET_COLS = 8                  # frames are stored side by side in image sheets
+IR_SHEET_FRAMES = 64
+IR_QUALITY = 70                    # WebP quality of the sheets
+CCF_THRESHOLDS_K = (195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240)
+ABI_EAST_VIEW_WEST_LIMIT = -135.0  # ABI sees much farther than GLM; used only when the usual satellite has no scan
+ABI_WEST_VIEW_EAST_LIMIT = -85.0
+
+ERA5_URL = os.environ.get("GLM_ERA5_URL", "https://nsf-ncar-era5.s3.amazonaws.com")
+ERA5_REGION = (-5.0, 60.0, -180.0, 0.0)     # south, north, west, east kept from each hourly field
+VORT_LOW_HPA = (900, 700)          # layer means: every ERA5 level between the bounds, equal weights
+VORT_MID_HPA = (600, 400)
+VORT_HALF_KM = 384.0
+VORT_RES_KM = 24.0                 # 33 x 33 points; ERA5 is about 28 km
+VORT_UNIT = 0.5e-5                 # s-1 per stored count (int8)
+ENV_WORKERS = int(os.environ.get("GLM_ENV_WORKERS", "12"))   # processes reading ABI files; 0 = read in this process
+ERA5_WORKERS = int(os.environ.get("GLM_ERA5_WORKERS", "4"))
+
 # ------------------------------------------------------------ real time ----
 LATENCY_MIN = 10           # leave the newest minutes alone; files are still arriving
 MAX_EXTRAP_H = 12          # extrapolate the centre this far past the last fix
@@ -94,6 +123,7 @@ TRACK_DIR = os.environ.get("GLM_TRACK_DIR", os.path.join(os.path.dirname(os.path
 
 DATA_DIR = os.environ.get("GLM_DATA_DIR", "public/data")    # published JSON
 CACHE_DIR = os.environ.get("GLM_CACHE_DIR", "cache")        # gridded cells, not published
+ENV_DIR = os.environ.get("GLM_ENV_DIR", "public-env/env")   # IR sheets and vorticity, published on their own branch
 _DATA = os.path.join(os.path.dirname(__file__), "data")
 # dist2coast.npz is the paper's 0.01 deg file (tools/convert_dist2coast.py);
 # dist2land_0p05.npz is the Natural Earth stand-in shipped with the code.

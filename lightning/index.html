@@ -81,11 +81,16 @@
       <div class="tiles" id="tiles"></div>
       <p class="scope" id="scope"></p>
 
-      <div class="panels">
+      <div class="panels" id="panels">
         <figure class="panel" id="map-panel">
           <figcaption><strong>Storm-centered lightning features</strong><span id="map-sub"></span></figcaption>
           <div class="square"><canvas id="map" aria-label="Map of lightning features relative to the disturbance center"></canvas></div>
           <div class="legend" id="map-legend"></div>
+        </figure>
+        <figure class="panel" id="ir-panel" hidden>
+          <figcaption><strong>Infrared and vorticity</strong><span id="ir-sub"></span></figcaption>
+          <div class="square"><canvas id="ir" aria-label="Channel 13 brightness temperature around the disturbance center with contours of ERA5 low- and mid-level vorticity"></canvas></div>
+          <div class="legend" id="ir-legend"></div>
         </figure>
         <figure class="panel" id="dist-panel">
           <figcaption><strong>Group area and energy of features</strong><span id="dist-sub"></span></figcaption>
@@ -96,7 +101,7 @@
 
       <figure class="panel" id="ts-panel">
         <figcaption><strong>Evolution within 200&nbsp;km</strong><span id="ts-sub"></span></figcaption>
-        <div id="ts-wrap"><svg id="ts" role="img" aria-label="Time series of lightning groups, features, group area and group energy"></svg></div>
+        <div id="ts-wrap"><svg id="ts" role="img" aria-label="Time series of lightning groups, features, group area and group energy, and for archived cases vorticity and cold cloud fraction"></svg></div>
         <details class="table-view">
           <summary>Show these values as a table</summary>
           <div class="table-scroll"><table id="ts-table"></table></div>
@@ -111,7 +116,7 @@
 
   <footer class="foot">
     <p>Method: Mesa, N., B. Trabing, M. Bell, A. Brammer, P. Duran, P. Klotzbach, K. Musgrave, and S. Stevenson, <em>An object-based analysis of lightning characteristics in pre-tropical cyclogenesis environments</em>. Code and data: <a href="https://doi.org/10.5061/dryad.x95x69pzq">doi.org/10.5061/dryad.x95x69pzq</a>.</p>
-    <p>Lightning: GOES-R Geostationary Lightning Mapper L2 (NOAA Open Data Dissemination). Centers: NHC ATCF best-track files. Features: <a href="https://tobac.readthedocs.io/">tobac</a>. Coastline: Natural Earth.</p>
+    <p>Lightning: GOES-R Geostationary Lightning Mapper L2 (NOAA Open Data Dissemination). Infrared: GOES-R Advanced Baseline Imager channel 13 (NOAA Open Data Dissemination). Vorticity: ERA5 (ECMWF/Copernicus Climate Change Service), from NSF NCAR&rsquo;s copy on AWS. Centers: NHC ATCF best-track files. Features: <a href="https://tobac.readthedocs.io/">tobac</a>. Coastline: Natural Earth.</p>
     <p>Experimental research product. Not an official forecast; see <a href="https://www.nhc.noaa.gov/">nhc.noaa.gov</a> for outlooks and advisories.</p>
   </footer>
 </div>
@@ -119,6 +124,8 @@
 <script>
   // Data is published by the "GLM real-time update" workflow to the glm-data branch of this repository.
   window.GLM_DATA_BASE = "https://raw.githubusercontent.com/nickmesa/nickmesa.github.io/glm-data/data/";
+  // Channel 13 images and ERA5 vorticity for archived cases are on the glm-env branch.
+  window.GLM_ENV_BASE = "https://raw.githubusercontent.com/nickmesa/nickmesa.github.io/glm-env/env/";
 </script>
 <script src="app.js"></script>
 </body>

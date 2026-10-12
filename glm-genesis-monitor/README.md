@@ -22,6 +22,7 @@ to Atlantic and East Pacific disturbances, in real time and for past cases.
 | `glm-genesis-monitor/` | This folder: the Python pipeline, tests and tools. Excluded from the published site in `_config.yml`. |
 | `.github/workflows/glm-realtime.yml` | Hourly update. |
 | `.github/workflows/glm-archive.yml` | Manual run that adds past cases: a few ids, or whole seasons. |
+| branch `glm-env` | Channel 13 images and ERA5 vorticity for archived cases: `env/index.json`, `env/<id>.json`, `env/<id>_<k>.webp`. One commit, no history. |
 | branch `glm-data` | The published data: `data/index.json`, `data/storms/<id>.json`, and the season lists in `data/backfill/`. Created by the first workflow run. |
 
 The data sits on its own branch instead of `main` because it is rewritten every hour. On `main`
@@ -44,7 +45,45 @@ GLM L2 LCFA (S3) ─┘                                         │
 | Feature detection, ghost-pixel fix, watershed segmentation, per-feature sums, linking | `pipeline/tracking.py` | `tobac_single_day.py`, `tobac_merge_pregenesis.py` |
 | Flag cells within 25 km of land, keep features within 200 km | `pipeline/process.py`, `pipeline/land.py` | `tobac_merge_pregenesis.py`, `tracks_200km_72hr.py` |
 
+| Channel 13 brightness temperature around the center, cold cloud fraction | `pipeline/abi.py`, `pipeline/env.py` | `Get_ABI.py`, `nc_output.py`, `cold_cloud_fraction` |
+| ERA5 low- and mid-level vorticity around the center and its 200 km mean | `pipeline/era5.py`, `pipeline/env.py` | `area_averaged_vort_series` |
+
 Every method parameter is in `pipeline/config.py`.
+
+## Infrared and vorticity (archived cases)
+
+**Actions → GLM add archive case → Run workflow** with `layer` set to `ir` adds, for cases whose
+lightning record is already in the archive:
+
+- **Channel 13 images** from every full-disk scan (10 minutes apart), as brightness temperature on
+  a 4 km grid 768 km across, centered on the interpolated center. Radiances are converted with the
+  Planck constants in the file; pixels with a quality flag of 1 or more, or outside 150 to 350 K,
+  are dropped (`QC_abi` in `Get_ABI.py`, without its whole-file test, which needs the full disk).
+- **Cold cloud fraction** within 200 km: cold pixels over all pixels in the circle, and no value
+  for a scan with more than 10% bad pixels there, as in `cold_cloud_fraction`. It is stored for
+  the thresholds in `CCF_THRESHOLDS_K`; the page shows 240 K, the paper's threshold, unless
+  `window.GLM_CCF_K` is set.
+- **ERA5 relative vorticity** each hour, as the mean over every ERA5 pressure level from 900 to
+  700 hPa (low level, 8 levels) and from 600 to 400 hPa (mid level, 5 levels), on a 24 km grid for
+  the contours, and its mean within 200 km weighted by the cosine of latitude, as in
+  `area_averaged_vort_series`. The source is NSF NCAR's copy of ERA5 on AWS
+  (`s3://nsf-ncar-era5`), which runs some months behind real time. A case processed before its
+  ERA5 days exist gets images and cold cloud fraction only; run the same seasons again later with
+  `fill` ticked to add the vorticity.
+
+Give `ids` for a few cases or `seasons` for all archived cases of those years. Nothing is
+downloaded whole: `pipeline/remote.py` opens the netCDF files in place with HTTP range requests,
+about 2 MB of each 25 MB ABI file and one 65 MB chunk per hour of each 1.5 GB ERA5 file. A 72 h
+case takes about two minutes.
+
+The images are the bulk of the data: about 1.5 MB per 72 h case. They go to the `glm-env`
+branch so the hourly update never has to fetch them, and that branch is rewritten as a single
+commit on every publish so that reruns do not pile up history. To move them out of this
+repository, publish that folder anywhere that serves files with CORS and point
+`window.GLM_ENV_BASE` in `lightning/index.html` at it.
+
+Cases closed out by the hourly update do not get images automatically. Run `layer: ir` for the
+current season from time to time; cases that are done are skipped.
 
 ## First run
 
@@ -125,7 +164,9 @@ variables), but nothing has touched a real GLM file or a live b-deck yet. On the
   can also be revised by NHC; each run re-reads the track and reanalyses the whole record.
 - **No shear.** The Brammer best-track files carried shear; ATCF b-decks do not, so there is no
   shear-relative view yet.
-- **No ABI.** Channel 13 brightness temperature and cold cloud fraction are not included.
+- **Channel 13 and ERA5 vorticity** are included for archived cases only (see above). The
+  vorticity layer means use every ERA5 level between the bounds with equal weight; if the file
+  used for the paper held fewer levels, `_layer()` in `pipeline/era5.py` is where to match it.
 - **Genesis** is the first `TS` record in the b-deck, as in `tracks_200km_72hr.py`
   (`GENESIS_TYPES` in `config.py`).
 - **Pre-genesis positions for past named systems.** NHC's archived b-deck for a named system is the
@@ -172,6 +213,10 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
 | Variable | Purpose |
 |---|---|
 | `window.GLM_DATA_BASE` | Where `index.json` and `storms/` live. |
+| `window.GLM_ENV_BASE` | Where the IR images and vorticity live. Unset hides the infrared panel. |
+| `window.GLM_CCF_K` | Cold cloud threshold in K (one of 195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240). Default 240. |
+| `window.GLM_VORT_LEVELS` | Vorticity contour levels in 10⁻⁵ s⁻¹. Default `[5, 10, 20, 40]`. |
+| `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: gray above −30 °C, then blue, green, yellow, orange and red toward colder tops. It is applied in the browser, so changing it needs no reprocessing. |
 | `window.GLM_DOMAINS` | Fixed ranges for the color scale and axes, e.g. `{ area: [60, 3000], energy: [0.5, 500], life: [5, 240] }`, so cases can be compared by eye. By default each record uses its own 2nd to 98th percentile range. |
 
 ## Data files
@@ -187,6 +232,13 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
   `energy` mean group energy (fJ), `cell` linked cell id, `life` cell lifetime (min), `land` 1 if
   the cell ever came within 25 km of land, `px` pixels in the segmentation mask.
 - `method`: the parameters used.
+
+On the `glm-env` branch, `env/<id>.json` holds the scan times (`ir.t`), the satellite and good-pixel
+fraction of each scan, cold cloud fractions per threshold (`ccf.frac`), and for each hour the 200 km
+mean vorticity (`vort.mean_low`, `vort.mean_mid`, 10⁻⁵ s⁻¹) and the two 33 × 33 grids as base64
+int8 in units of `vort.unit`. The images are in sheets of 64 frames: a stored byte b is a
+brightness temperature of `tb_max − b × tb_step` K, and 0 also marks a bad pixel.
+`env/index.json` lists what has been processed, with timings and any warnings.
 
 `data/backfill/<year>-<basin>.json` is the record of a season run (see *Whole seasons*). The page
 does not read it.
