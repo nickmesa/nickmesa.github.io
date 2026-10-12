@@ -164,7 +164,8 @@
       .then(function (ix) { st.envIndex = ix.cases || {}; })
       .catch(function () { st.envIndex = st.envIndex || {}; });
   }
-  function hasEnv(id) { var c = st.envIndex && st.envIndex[id]; return !!(ENV_BASE && c && !c.error && c.frames); }
+  // (the element test keeps this script working with a cached copy of the page from before the panel existed)
+  function hasEnv(id) { var c = st.envIndex && st.envIndex[id]; return !!(ENV_BASE && $('ir-panel') && c && !c.error && c.frames); }
   function int8From(b64) {
     var bin = atob(b64), a = new Int8Array(bin.length);
     for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
@@ -404,8 +405,7 @@
       $('detail').hidden = false;
       $('cursor').max = st.S.ns;
       var env = hasEnv(id) && p.status !== 'active';
-      $('ir-panel').hidden = !env;
-      $('panels').classList.toggle('three', env);
+      if ($('ir-panel')) { $('ir-panel').hidden = !env; $('panels').classList.toggle('three', env); }
       if (!sameEnv) st.E = null;
       renderHeadline();
       renderMethod();
@@ -620,7 +620,7 @@
   }
   function drawIR() {
     var S = st.S, E = st.E, C = st.C;
-    if (!S || $('ir-panel').hidden) return;
+    if (!S || !$('ir-panel') || $('ir-panel').hidden) return;
     var f = fitCanvas($('ir')), ctx = f.ctx, w = f.w, h = f.h;
     var half = E ? E.half : 384, m = { l: 34, r: 8, t: 8, b: 22 }, side = Math.min(w - m.l - m.r, h - m.t - m.b);
     var ox = m.l + (w - m.l - m.r - side) / 2, oy = m.t, s = side / (2 * half);
@@ -721,8 +721,8 @@
     $('ir-sub').textContent = sub || 'channel 13 brightness temperature';
   }
   function renderIRLegend() {
+    if (!$('ir-panel') || $('ir-panel').hidden) return;
     var E = st.E, box = clear($('ir-legend'));
-    if ($('ir-panel').hidden) return;
     var item = el('span', { 'class': 'item' });
     item.appendChild(el('span', null, 'Brightness temp. (°C)'));
     var rb = el('span', { 'class': 'rampbox' }), bar = el('span', { 'class': 'ramp wide' }), ticks = el('span', { 'class': 'ticks wide' });
@@ -915,7 +915,7 @@
 
   function renderTS() {
     var S = st.S, svg = clear($('ts')), W = Math.max(300, Math.round($('ts-wrap').getBoundingClientRect().width));
-    var E = st.E && !$('ir-panel').hidden ? st.E : null, ROWS = TS_ROWS.concat(E ? ENV_ROWS : []);
+    var E = st.E && $('ir-panel') && !$('ir-panel').hidden ? st.E : null, ROWS = TS_ROWS.concat(E ? ENV_ROWS : []);
     var m = { l: 46, r: 14, t: S.genesis ? 26 : 10 }, rowH = 78, gap = 26, pw = W - m.l - m.r;
     var bins = binSeries(S), tA = S.t0, tB = S.t0 + S.ns * S.dt;
     var X = function (t) { return m.l + (t - tA) / (tB - tA) * pw; }, XK = function (k) { return X(S.t0 + k * S.dt); };
@@ -1317,8 +1317,7 @@
       $(id).addEventListener('pointermove', function (e) { hoverCanvas(e, id); });
       $(id).addEventListener('pointerleave', function () { hideTip(); if (st.hover >= 0) { st.hover = -1; drawMap(); drawDist(); } });
     });
-    $('ir').addEventListener('pointermove', hoverIR);
-    $('ir').addEventListener('pointerleave', hideTip);
+    if ($('ir')) { $('ir').addEventListener('pointermove', hoverIR); $('ir').addEventListener('pointerleave', hideTip); }
     var dragging = false, ts = $('ts');
     ts.addEventListener('pointerdown', function (e) { dragging = true; stopPlay(); try { ts.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } tsPointer(e, true); });
     ts.addEventListener('pointermove', function (e) { tsPointer(e, dragging); });

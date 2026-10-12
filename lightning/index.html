@@ -6,7 +6,13 @@
 <title>Pre-Genesis Lightning Monitor</title>
 <meta name="description" content="GOES GLM lightning features within 200 km of Atlantic and East Pacific tropical disturbances, in real time and for past cases.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css">
+<script>
+  // The stylesheet and script are requested with the time this page was deployed, so a browser
+  // never pairs a fresh copy of this page with stale cached copies of them (or the reverse).
+  window.GLM_BUILD = Math.floor(Date.parse(document.lastModified) / 1000) || 0;
+  document.write('<link rel="stylesheet" href="style.css?v=' + window.GLM_BUILD + '">');
+</script>
+<noscript><link rel="stylesheet" href="style.css"></noscript>
 </head>
 <body>
 <div class="page">
@@ -127,6 +133,6 @@
   // Channel 13 images and ERA5 vorticity for archived cases are on the glm-env branch.
   window.GLM_ENV_BASE = "https://raw.githubusercontent.com/nickmesa/nickmesa.github.io/glm-env/env/";
 </script>
-<script src="app.js"></script>
+<script>document.write('<script src="app.js?v=' + window.GLM_BUILD + '"><\/script>');</script>
 </body>
 </html>
