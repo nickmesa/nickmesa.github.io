@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 
 from . import abi, config, era5
+from .geo import haversine
 
 UTC = timezone.utc
 _POOLS = {}
@@ -66,15 +67,20 @@ class Centre:
         return float(np.interp(when, self.t, self.lat)), float(np.interp(when, self.t, self.lon))
 
 
-def find_scans(centre, log=print):
+def find_scans(centre, log=print, since=None):
     """The channel 13 scans a record needs, oldest first.
 
     Each is dict(t, bucket, key, alt): `alt` is the same scan from the other
     satellite position where that also sees the storm, used if the first
     choice turns out to be missing or mostly bad. One scan before the window
     is kept so the first minutes have an image.
+
+    since: time of the newest scan already known (a real-time update). Only
+    the hours from the one holding it onward are listed.
     """
     first = _dt(centre.start) - timedelta(minutes=20)
+    if since is not None:
+        first = max(first, _dt(since) - timedelta(minutes=40))
     hour = first.replace(minute=0, second=0, microsecond=0)
     scans, listings = [], {}
 
@@ -192,56 +198,133 @@ def hours_of(centre):
     return hours
 
 
-def build(product, log=print, now=None):
-    """Process one record. Returns its summary for the index (see run_env.py)."""
+def _window(scans, centre):
+    """The scans of a record: the last one at or before its start, then every later one up to its end."""
+    scans = sorted((s for s in scans if s["t"] <= centre.end), key=lambda s: s["t"])
+    before = [s for s in scans if s["t"] <= centre.start]
+    return before[-1:] + [s for s in scans if s["t"] > centre.start]
+
+
+def _reusable(frame, clat, clon):
+    """A frame read earlier can be kept while the centre it was cut around has not moved by more than a pixel or two."""
+    return frame is not None and float(haversine(frame["clat"], frame["clon"], clat, clon)) <= config.IR_REUSE_KM
+
+
+def _build(product, log, now, prior):
+    """Process one record. Returns (summary for the index, what to keep for the next update).
+
+    prior=None reads everything (an archive run). A real-time update passes the
+    dict returned by the previous one: scans already read are reused, only new
+    scans and ERA5 hours that were not available before are read, and the
+    sheets are written again from the stored frames (no generation loss).
+    """
     began = time.monotonic()
     now = now or datetime.now(UTC)
     key = product["id"]
     centre = Centre(product)
+    live = prior is not None
+    prior = prior or {}
 
     # ---- IR -----------------------------------------------------------------
-    scans = find_scans(centre, log=log)
+    old_scans = prior.get("scans", [])
+    since = max((s["t"] for s in old_scans), default=None)
+    scans = find_scans(centre, log=log, since=since)
+    if old_scans:
+        merged = {s["key"]: s for s in old_scans}
+        merged.update({s["key"]: s for s in scans})
+        scans = _window(list(merged.values()), centre)
+    old_frames = prior.get("frames", {})
+    results = [None] * len(scans)
+    need = []
+    for i, s in enumerate(scans):
+        old = old_frames.get(s["key"])
+        if _reusable(old, *centre(s["t"])):
+            results[i] = dict(old, error="", requests=0, bytes=0, reused=True)
+        else:
+            need.append(i)
     url = lambda bucket, k: f"{config.GLM_URL.format(bucket=bucket)}/{k}"
-    results = _map("abi", config.ENV_WORKERS, abi.read_frame,
-                   [abi.frame_job(url(s["bucket"], s["key"]), *centre(s["t"])) for s in scans])
+    for i, r in zip(need, _map("abi", config.ENV_WORKERS, abi.read_frame,
+                               [abi.frame_job(url(scans[i]["bucket"], scans[i]["key"]), *centre(scans[i]["t"])) for i in need])):
+        results[i] = r
     # a scan that is missing or mostly bad is tried from the other satellite
-    retry = [i for i, (s, r) in enumerate(zip(scans, results)) if s["alt"] and (r["error"] or r["valid"] < 1 - config.IR_MAX_BAD)]
+    retry = [i for i in need if scans[i]["alt"] and (results[i]["error"] or results[i]["valid"] < 1 - config.IR_MAX_BAD)]
     second = _map("abi", config.ENV_WORKERS, abi.read_frame,
                   [abi.frame_job(url(*scans[i]["alt"]), *centre(scans[i]["t"])) for i in retry])
-    cost = results + list(second)
+    cost = [results[i] for i in need] + list(second)
     for i, r in zip(retry, second):
         if not r["error"] and (results[i]["error"] or r["valid"] > results[i]["valid"]):
             results[i], scans[i] = r, dict(scans[i], bucket=scans[i]["alt"][0])
-    frames = [dict(r, t=s["t"], sat=abi.SAT_CODE.get(s["bucket"], 0)) for s, r in zip(scans, results) if not r["error"]]
+    frames, kept = [], {}
+    for s, r in zip(scans, results):
+        if r["error"]:
+            continue
+        f = dict(r, t=s["t"], sat=r["sat"] if r.get("reused") else abi.SAT_CODE.get(s["bucket"], 0))
+        frames.append(f)
+        kept[s["key"]] = dict(t=f["t"], sat=f["sat"], valid=f["valid"], ccf=f["ccf"], image=f["image"],
+                              clat=centre(s["t"])[0] if not r.get("reused") else r["clat"],
+                              clon=centre(s["t"])[1] if not r.get("reused") else r["clon"])
     failed = [r["error"] for r in results if r["error"]]
 
     # ---- vorticity ----------------------------------------------------------
     hours = hours_of(centre)
-    reads = _map("era5", config.ERA5_WORKERS, era5.read_day, era5.jobs_for(hours))
-    samples = [era5.sample(when, *centre(when.timestamp())) for when in hours]
+    old_samples = prior.get("samples", {})
+    samples, tried, reads = [], prior.get("era5_try"), []
+    if live:
+        # ERA5 is published months behind real time: ask only about hours old enough, and only now and then
+        due = tried is None or (now.timestamp() - tried) >= config.ERA5_RETRY_H * 3600
+        ask = [w for w in hours if int(w.timestamp()) not in old_samples
+               and (now - w) >= timedelta(days=config.ERA5_MIN_AGE_DAYS)] if due else []
+        if ask:
+            reads = _map("era5", config.ERA5_WORKERS, era5.read_day, era5.jobs_for(ask))
+            tried = int(now.timestamp())
+        asked = {int(w.timestamp()) for w in ask}
+        for when in hours:
+            ts = int(when.timestamp())
+            samples.append(old_samples[ts] if ts in old_samples else
+                           era5.sample(when, *centre(ts)) if ts in asked else None)
+    else:
+        reads = _map("era5", config.ERA5_WORKERS, era5.read_day, era5.jobs_for(hours))
+        samples = [era5.sample(when, *centre(when.timestamp())) for when in hours]
     read_errors = [r["error"] for r in reads if r["error"]]
-    levels = {"low": next((r["levels_low"] for r in reads if r.get("levels_low")), None),
-              "mid": next((r["levels_mid"] for r in reads if r.get("levels_mid")), None)}
+    levels = {"low": next((r["levels_low"] for r in reads if r.get("levels_low")), None) or (prior.get("levels") or {}).get("low"),
+              "mid": next((r["levels_mid"] for r in reads if r.get("levels_mid")), None) or (prior.get("levels") or {}).get("mid")}
 
     doc, size = write(key, centre, frames, hours, samples, now, levels)
     have = doc["vort"]["have"]
-    log(f"  IR: {len(frames)} of {len(scans)} scans read ({sum(r['requests'] for r in cost)} requests, "
+    log(f"  IR: {len(frames)} of {len(scans)} scans ({len(need)} read, {sum(r['requests'] for r in cost)} requests, "
         f"{sum(r['bytes'] for r in cost) / 1e6:.0f} MB), {len(doc['ir']['sheets'])} sheets")
     log(f"  ERA5: {sum(have)} of {len(hours)} hours ({sum(r['bytes'] for r in reads) / 1e6:.0f} MB read"
         + (f"; not published yet for {sum(r['missing'] for r in reads)} days" if any(r["missing"] for r in reads) else "")
         + (f"; errors: {read_errors[0]}" if read_errors else "") + ")")
     problems = sorted(set(failed + read_errors))
-    return {
+    pending = bool(any(r["missing"] for r in reads)) if not live else not all(have)
+    summary = {
         "frames": len(frames), "scans": len(scans), "sheets": len(doc["ir"]["sheets"]),
         "ccf_frames": int(sum(f["ccf"] is not None for f in frames)),
-        "hours": len(hours), "vort_hours": int(sum(have)), "era5_pending": bool(any(r["missing"] for r in reads)),
+        "hours": len(hours), "vort_hours": int(sum(have)), "era5_pending": pending,
         "sats": sorted({f["sat"] for f in frames}),
         "kb": round(size / 1e3), "seconds": round(time.monotonic() - began),
         "abi_requests": int(sum(r["requests"] for r in cost)), "abi_mb": round(sum(r["bytes"] for r in cost) / 1e6, 1),
-        "abi_chunks": next((r.get("chunks") for r in results if r.get("chunks")), None),
+        "abi_chunks": next((r.get("chunks") for r in cost if r.get("chunks")), None),
         "era5_mb": round(sum(r["bytes"] for r in reads) / 1e6), "era5_seconds": round(sum(r["seconds"] for r in reads)),
         "era5_chunks": next((r.get("chunks") for r in reads if r.get("chunks")), None),
         # an error means nothing usable came out and the case should be tried again; warnings are partial losses
         "error": (problems[0] if problems else "no channel 13 scans found")[:300] if not frames else "",
         "warnings": "; ".join(problems)[:300], "updated": doc["updated"],
+        "t_end": centre.end,
     }
+    if live:
+        summary["era5_try"] = tried
+    keep = {"scans": [dict(s) for s in scans], "frames": kept, "levels": levels, "era5_try": tried,
+            "samples": {int(w.timestamp()): s for w, s in zip(hours, samples) if s is not None}}
+    return summary, keep
+
+
+def build(product, log=print, now=None):
+    """Process one archived record from scratch. Returns its summary for the index (see run_env.py)."""
+    return _build(product, log, now, None)[0]
+
+
+def build_live(product, prior, log=print, now=None):
+    """Update one record of the real-time page. Returns (summary, prior for the next update)."""
+    return _build(product, log, now, prior or {})

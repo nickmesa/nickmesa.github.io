@@ -80,6 +80,13 @@ VORT_UNIT = 0.5e-5                 # s-1 per stored count (int8)
 ENV_WORKERS = int(os.environ.get("GLM_ENV_WORKERS", "12"))   # processes reading ABI files; 0 = read in this process
 ERA5_WORKERS = int(os.environ.get("GLM_ERA5_WORKERS", "4"))
 
+# Real-time updates of the IR layer (pipeline/run_env_live.py)
+IR_REUSE_KM = 6.0                  # a stored frame is kept while the centre it was cut around has moved less than this
+ERA5_MIN_AGE_DAYS = 14             # NCAR publishes ERA5 months behind real time: do not ask about newer hours
+ERA5_RETRY_H = 24                  # ask again about missing ERA5 hours no more often than this
+ENV_LIVE_MAX_MIN = 45              # stop starting new records after this many minutes
+ENV_LIVE_ENDED_PER_RUN = 6         # records that have ended and have no IR yet, started per update
+
 # ------------------------------------------------------------ real time ----
 LATENCY_MIN = 10           # leave the newest minutes alone; files are still arriving
 MAX_EXTRAP_H = 12          # extrapolate the centre this far past the last fix

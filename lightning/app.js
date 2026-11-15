@@ -14,7 +14,9 @@
   var DOMAINS = window.GLM_DOMAINS || {};
   var MAP_HALF_KM = 260;
   // Archived cases: channel 13 images and ERA5 vorticity (written by pipeline/env.py).
-  var ENV_BASE = EMBED ? null : (DEMO ? 'demo/env/' : (window.GLM_ENV_BASE || null));
+  // Real-time systems (and cases finished since the last archive run) keep theirs on the glm-data branch beside the
+  // lightning; the archive branch holds the rest. An id is taken from whichever has more of it.
+  var ENV_BASES = EMBED ? [] : DEMO ? ['demo/env/'] : [window.GLM_LIVE_ENV_BASE || (window.GLM_DATA_BASE ? window.GLM_DATA_BASE + 'env/' : null), window.GLM_ENV_BASE].filter(Boolean);
   var CCF_K = window.GLM_CCF_K || 240;                         // cold cloud threshold (K); see config.CCF_THRESHOLDS_K
   var VORT_LEVELS = window.GLM_VORT_LEVELS || [5, 10, 20, 40]; // contours, 1e-5 s-1
   // Enhanced infrared color scale of the kind used on tropical weather sites: gray for warm
@@ -158,14 +160,33 @@
 
   // ------------------------------------------------- IR and vorticity data
   function loadEnvIndex() {
-    if (!ENV_BASE) return Promise.resolve();
-    return fetch(ENV_BASE + 'index.json', { cache: 'no-cache' })
-      .then(function (r) { return r.ok ? r.json() : { cases: {} }; })
-      .then(function (ix) { st.envIndex = ix.cases || {}; })
-      .catch(function () { st.envIndex = st.envIndex || {}; });
+    if (!ENV_BASES.length) return Promise.resolve();
+    return Promise.all(ENV_BASES.map(function (base) {
+      return fetch(base + 'index.json', { cache: 'no-cache' })
+        .then(function (r) { return r.ok ? r.json() : { cases: {} }; })
+        .then(function (ix) { return { base: base, cases: ix.cases || {} }; })
+        .catch(function () { return null; });
+    })).then(function (parts) {
+      if (!parts.some(Boolean)) { st.envIndex = st.envIndex || {}; return; }
+      var merged = {};
+      parts.forEach(function (part) {
+        if (!part) return;
+        Object.keys(part.cases).forEach(function (id) {
+          var c = part.cases[id], have = merged[id];
+          if (!c || c.error || !c.frames) return;
+          var more = !have || (c.vort_hours || 0) > (have.vort_hours || 0) ||
+            ((c.vort_hours || 0) === (have.vort_hours || 0) && String(c.updated || '') > String(have.updated || ''));
+          if (more) { var entry = { _base: part.base }; for (var k in c) entry[k] = c[k]; merged[id] = entry; }
+        });
+      });
+      st.envIndex = merged;
+    });
   }
+  // The panel is there whenever infrared is configured; a system without any yet says so in it.
   // (the element test keeps this script working with a cached copy of the page from before the panel existed)
-  function hasEnv(id) { var c = st.envIndex && st.envIndex[id]; return !!(ENV_BASE && $('ir-panel') && c && !c.error && c.frames); }
+  function envConfigured() { return !!(ENV_BASES.length && $('ir-panel')); }
+  function hasEnv(id) { return !!(envConfigured() && st.envIndex && st.envIndex[id]); }
+  function envStamp(id) { var c = st.envIndex && st.envIndex[id]; return c ? c.updated : null; }
   function int8From(b64) {
     var bin = atob(b64), a = new Int8Array(bin.length);
     for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
@@ -187,12 +208,19 @@
     };
   }
   function loadEnv(id) {
-    st.E = null;
+    if (st.E && st.E.doc.id !== id) st.E = null;           // an update of the same system keeps showing the old images meanwhile
     if (!hasEnv(id)) return Promise.resolve();
-    return fetch(ENV_BASE + id + '.json', { cache: 'no-cache' })
+    var entry = st.envIndex[id], base = entry._base, stamp = entry.updated;
+    return fetch(base + id + '.json?v=' + encodeURIComponent(stamp), { cache: 'no-cache' })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then(function (doc) { if (st.id === id) st.E = prepareEnv(doc); })
-      .catch(function () { if (st.id === id) st.E = null; });
+      .then(function (doc) { if (st.id === id) { st.E = prepareEnv(doc); st.E.base = base; st.E.stamp = stamp; } })
+      .catch(function () { if (st.id === id && (!st.E || st.E.doc.id !== id)) st.E = null; });
+  }
+  // after the index is refreshed: load newer images for the system on screen
+  function refreshEnv() {
+    var id = st.id;
+    if (!id || !st.S || !hasEnv(id) || (st.E && st.E.doc.id === id && st.E.stamp === envStamp(id))) return;
+    loadEnv(id).then(function () { if (st.id === id) { renderMethod(); renderAll(); } });
   }
   function decodeGray(blob) {
     var typed = new Blob([blob], { type: 'image/webp' });
@@ -213,7 +241,7 @@
     var si = Math.floor(fi / E.doc.ir.per_sheet), sh = E.sheets[si];
     if (!sh) {
       sh = E.sheets[si] = { gray: null, failed: false };
-      fetch(ENV_BASE + E.doc.ir.sheets[si])
+      fetch(E.base + E.doc.ir.sheets[si] + '?v=' + encodeURIComponent(E.doc.updated || ''))
         .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
         .then(decodeGray)
         .then(function (g) { sh.gray = g.gray; sh.w = g.w; if (st.E === E) drawIR(); })
@@ -397,16 +425,16 @@
     return getJSON('storms/' + id + '.json').then(function (p) {
       if (st.id !== id) return;
       var wasEnd = st.S && st.cursor >= st.S.ns;
-      var sameEnv = keepView && st.E && st.E.doc.id === id;
+      var sameEnv = keepView && st.E && st.E.doc.id === id && st.E.stamp === envStamp(id);
       st.S = prepare(p);
       if (!keepView || wasEnd) st.cursor = st.S.ns;
       st.cursor = Math.max(1, Math.min(st.S.ns, st.cursor));
       st.hover = -1;
       $('detail').hidden = false;
       $('cursor').max = st.S.ns;
-      var env = hasEnv(id) && p.status !== 'active';
-      if ($('ir-panel')) { $('ir-panel').hidden = !env; $('panels').classList.toggle('three', env); }
-      if (!sameEnv) st.E = null;
+      var env = hasEnv(id), showIR = envConfigured();
+      if ($('ir-panel')) { $('ir-panel').hidden = !showIR; $('panels').classList.toggle('three', showIR); }
+      if (!sameEnv && !(keepView && st.E && st.E.doc.id === id)) st.E = null;
       renderHeadline();
       renderMethod();
       renderAll();
@@ -627,11 +655,12 @@
     var X = function (km) { return ox + side / 2 + km * s; }, Y = function (km) { return oy + side / 2 - km * s; };
     st.irGeom = { ox: ox, oy: oy, side: side, s: s, half: half, fi: -1, hi: -1 };
     var tc = S.t0 + st.cursor * S.dt, msg = '', sub = '';
-    ctx.fillStyle = '#0b0d10'; ctx.fillRect(ox, oy, side, side);
+    var fi = E ? frameAt(E, tc) : -1, hi = E ? vortHour(E, tc) : -1, tf = fi >= 0 ? E.t[fi] : tc;
+    var ready = !!(E && fi >= 0 && tc - E.t[fi] <= 1500 && frameBytes(E, fi));      // an image is about to be drawn
+    ctx.fillStyle = ready ? '#0b0d10' : (C.land || '#e6ebe5'); ctx.fillRect(ox, oy, side, side);
     ctx.save();
     ctx.beginPath(); ctx.rect(ox, oy, side, side); ctx.clip();
-    var fi = E ? frameAt(E, tc) : -1, hi = E ? vortHour(E, tc) : -1, tf = fi >= 0 ? E.t[fi] : tc;
-    if (!E) msg = 'Loading';
+    if (!E) msg = hasEnv(st.id) ? 'Loading' : (S.p.status === 'active' ? 'Infrared arrives with the next update' : 'No infrared for this case');
     else if (fi < 0 || tc - E.t[fi] > 1500) { msg = 'No scan at this time'; fi = -1; }
     else {
       var bytes = frameBytes(E, fi);
@@ -651,7 +680,7 @@
     }
     // coastline, placed for the center at the scan time
     var c = stepCentre(S, Math.round((tf - S.t0) / S.dt)), clat = c[0], clon = c[1];
-    if (st.coast && clat != null) {
+    if (ready && st.coast && clat != null) {
       var dLat = half * 1.45 / 111.19 + 0.2, dLon = dLat / Math.max(0.2, Math.cos(clat * Math.PI / 180));
       cased(ctx, 'rgba(255, 255, 255, 0.82)', 0.9, null, function () {
         st.coast.forEach(function (ring) {
@@ -669,9 +698,9 @@
     }
     // the radius the time series are taken over
     var R = S.p.method.radius_km;
-    cased(ctx, 'rgba(255, 255, 255, 0.9)', 1, [2, 4], function () { ctx.arc(X(0), Y(0), R * s, 0, 2 * Math.PI); });
+    if (ready) cased(ctx, 'rgba(255, 255, 255, 0.9)', 1, [2, 4], function () { ctx.arc(X(0), Y(0), R * s, 0, 2 * Math.PI); });
     // vorticity contours: low level solid black, mid level dashed white (the image uses every hue)
-    if (E && hi >= 0) {
+    if (ready && hi >= 0) {
       st.irGeom.hi = hi;
       [['low', '#000000', null, HALO_LIGHT], ['mid', '#ffffff', [7, 4], HALO_DARK]].forEach(function (layer) {
         var grid = E[layer[0]];
@@ -691,7 +720,7 @@
       });
     }
     // lightning features in the selected window
-    if (st.irLightning && fi >= 0) {
+    if (st.irLightning && ready) {
       var r = windowRange(S), wsteps = windowSteps(S);
       for (var q = r[0]; q < r[1]; q++) {
         if (!shown(S, q)) continue;
@@ -701,14 +730,17 @@
       }
       ctx.globalAlpha = 1;
     }
-    cased(ctx, '#ffffff', 1.4, null, function () { ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); });
+    if (ready) cased(ctx, '#ffffff', 1.4, null, function () { ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); });
     ctx.font = '11px ' + C.mono; ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
     var a45 = Math.PI / 4, lx = X(R * Math.cos(a45)) + 4, ly = Y(R * Math.sin(a45)) - 2;
-    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(8, 10, 14, 0.7)'; ctx.strokeText(R + ' km', lx, ly);
-    ctx.fillStyle = '#ffffff'; ctx.fillText(R + ' km', lx, ly);
+    if (ready) {
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(8, 10, 14, 0.7)'; ctx.strokeText(R + ' km', lx, ly);
+      ctx.fillStyle = '#ffffff'; ctx.fillText(R + ' km', lx, ly);
+    }
     if (msg) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '13px ' + C.mono;
-      ctx.lineWidth = 3; ctx.strokeText(msg, X(0), Y(half * 0.62)); ctx.fillText(msg, X(0), Y(half * 0.62));
+      if (ready) { ctx.lineWidth = 3; ctx.strokeText(msg, X(0), Y(half * 0.62)); ctx.fillText(msg, X(0), Y(half * 0.62)); }
+      else { ctx.fillStyle = C.muted; ctx.fillText(msg, X(0), Y(0)); }
     }
     ctx.restore();
     ctx.strokeStyle = C.axis; ctx.lineWidth = 1; ctx.strokeRect(ox + 0.5, oy + 0.5, side - 1, side - 1);
@@ -1336,7 +1368,7 @@
         'This page fills in after the first real-time update or archive run publishes its data.',
         DEMO || EMBED ? null : ['?demo=1', 'Open the page with synthetic example data']);
     });
-    if (!EMBED) setInterval(function () { loadEnvIndex().then(function () { return loadIndex(false); }).catch(function () { /* keep the current view */ }); }, REFRESH_MS);
+    if (!EMBED) setInterval(function () { loadEnvIndex().then(function () { return loadIndex(false); }).then(refreshEnv).catch(function () { /* keep the current view */ }); }, REFRESH_MS);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
