@@ -1,7 +1,8 @@
 name: GLM real-time update
 
 # Hourly: find active Atlantic / East Pacific disturbances, download new GLM
-# files, rerun the tobac analysis, and publish JSON to the glm-data branch.
+# files, rerun the tobac analysis, add the channel 13 infrared images for the
+# same systems, and publish JSON and images to the glm-data branch.
 # The page at /lightning reads that branch. Nothing here commits to main.
 on:
   schedule:
@@ -53,6 +54,17 @@ jobs:
 
       - name: Update
         run: python -m pipeline.run_realtime
+
+      # Channel 13 images for the same systems, written beside the lightning on the glm-data
+      # branch (data/env/). A failure here must not stop the lightning from being published.
+      # Scans read earlier are kept in the cache above, so a normal run reads only the new ones.
+      - name: Update infrared
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          GLM_ENV_DIR: public/data/env
+          GLM_ARCHIVE_ENV_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/glm-env/env/index.json
+        run: python -m pipeline.run_env_live
 
       - uses: actions/cache/save@v4
         if: always()

@@ -23,7 +23,7 @@ to Atlantic and East Pacific disturbances, in real time and for past cases.
 | `.github/workflows/glm-realtime.yml` | Hourly update. |
 | `.github/workflows/glm-archive.yml` | Manual run that adds past cases: a few ids, or whole seasons. |
 | branch `glm-env` | Channel 13 images and ERA5 vorticity for archived cases: `env/index.json`, `env/<id>.json`, `env/<id>_<k>.webp`. One commit, no history. |
-| branch `glm-data` | The published data: `data/index.json`, `data/storms/<id>.json`, and the season lists in `data/backfill/`. Created by the first workflow run. |
+| branch `glm-data` | The published data: `data/index.json`, `data/storms/<id>.json`, the season lists in `data/backfill/`, and the infrared of real-time systems in `data/env/` (see *Infrared for real-time systems*). Created by the first workflow run. |
 
 The data sits on its own branch instead of `main` because it is rewritten every hour. On `main`
 that would add a commit and a site rebuild each hour and grow the history by roughly a gigabyte
@@ -82,8 +82,37 @@ commit on every publish so that reruns do not pile up history. To move them out 
 repository, publish that folder anywhere that serves files with CORS and point
 `window.GLM_ENV_BASE` in `lightning/index.html` at it.
 
-Cases closed out by the hourly update do not get images automatically. Run `layer: ir` for the
-current season from time to time; cases that are done are skipped.
+## Infrared for real-time systems
+
+The hourly workflow also runs `python -m pipeline.run_env_live` after the lightning update
+(`pipeline/run_env_live.py`), so every system on the real-time page has its channel 13 images
+beside the lightning, and the page shows the infrared panel for every system.
+
+- The files go to `data/env/` on the `glm-data` branch (same layout as on `glm-env`:
+  `index.json`, `<id>.json`, `<id>_<k>.webp`). The page reads that folder and the `glm-env`
+  branch and, for a system found in both, takes the one with more vorticity hours, then the newer.
+- An active system is updated every run. Scans already read are kept in the workflow cache
+  (`cache/env/<id>.pkl.gz`), so a run reads only the scans that arrived since the last one (about
+  six per hour per system); the sheets are written again from the stored frames, so the old
+  ones come out byte for byte the same. If the cache is lost, the next run reads the record again
+  from the beginning (a few minutes per system). A frame is read again if the center it was cut
+  around has since moved by more than `IR_REUSE_KM`.
+- A system that has ended and has no images on `glm-env` is processed once, up to
+  `ENV_LIVE_ENDED_PER_RUN` per run. The archive branch is looked at only through its
+  `env/index.json` (`GLM_ARCHIVE_ENV_INDEX_URL`); if that cannot be read, no backlog is started.
+- ERA5 is added when it exists. Once an hour is older than `ERA5_MIN_AGE_DAYS` the run asks
+  NCAR about it, at most every `ERA5_RETRY_H` hours, and adds the vorticity to the record when
+  the day turns up. Until then the panel shows the image without contours and says so.
+- When `layer: ir` later archives the same case on `glm-env` with at least as much vorticity,
+  or the system is dropped from the lightning index, the copy under `data/env/` and its stored
+  frames are removed.
+- The step is `continue-on-error`, so a problem with the infrared never stops the lightning
+  from being published. The first run after this was added reads every active system from the
+  start of its record, and one run per hour starts up to six ended systems that have no images
+  (the cases closed out since the last `layer: ir` run), so the catch-up takes a few hours.
+
+Cases that are in the archive branch are not touched by this; add ERA5 to those with `layer: ir`
+and `fill` as before.
 
 ## First run
 
@@ -164,7 +193,7 @@ variables), but nothing has touched a real GLM file or a live b-deck yet. On the
   can also be revised by NHC; each run re-reads the track and reanalyses the whole record.
 - **No shear.** The Brammer best-track files carried shear; ATCF b-decks do not, so there is no
   shear-relative view yet.
-- **Channel 13 and ERA5 vorticity** are included for archived cases only (see above). The
+- **Channel 13 and ERA5 vorticity** are included for archived cases and, for channel 13, for real-time systems (see above). The
   vorticity layer means use every ERA5 level between the bounds with equal weight; if the file
   used for the paper held fewer levels, `_layer()` in `pipeline/era5.py` is where to match it.
 - **Genesis** is the first `TS` record in the b-deck, as in `tracks_200km_72hr.py`
@@ -213,7 +242,8 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
 | Variable | Purpose |
 |---|---|
 | `window.GLM_DATA_BASE` | Where `index.json` and `storms/` live. |
-| `window.GLM_ENV_BASE` | Where the IR images and vorticity live. Unset hides the infrared panel. |
+| `window.GLM_ENV_BASE` | Where the IR images and vorticity of archived cases live (the `glm-env` branch). |
+| `window.GLM_LIVE_ENV_BASE` | Where the IR images of real-time systems live. Defaults to `GLM_DATA_BASE` + `env/`. The infrared panel is hidden only if neither base is set. |
 | `window.GLM_CCF_K` | Cold cloud threshold in K (one of 195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240). Default 240. |
 | `window.GLM_VORT_LEVELS` | Vorticity contour levels in 10⁻⁵ s⁻¹. Default `[5, 10, 20, 40]`. |
 | `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: gray above −30 °C, then blue, green, yellow, orange and red toward colder tops. It is applied in the browser, so changing it needs no reprocessing. |
@@ -233,7 +263,7 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
   the cell ever came within 25 km of land, `px` pixels in the segmentation mask.
 - `method`: the parameters used.
 
-On the `glm-env` branch, `env/<id>.json` holds the scan times (`ir.t`), the satellite and good-pixel
+On the `glm-env` branch (and under `data/env/` on `glm-data`), `env/<id>.json` holds the scan times (`ir.t`), the satellite and good-pixel
 fraction of each scan, cold cloud fractions per threshold (`ccf.frac`), and for each hour the 200 km
 mean vorticity (`vort.mean_low`, `vort.mean_mid`, 10⁻⁵ s⁻¹) and the two 33 × 33 grids as base64
 int8 in units of `vort.unit`. The images are in sheets of 64 frames: a stored byte b is a

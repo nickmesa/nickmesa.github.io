@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from pipeline import abi, atcf, collect, config, env, era5, glm, process, remote, run_archive, run_env, run_realtime, run_season
+from pipeline import abi, atcf, collect, config, env, era5, glm, process, remote, run_archive, run_env, run_env_live, run_realtime, run_season
 from pipeline.geo import centred_grid, destination, haversine, lattice_index, offsets_km
 from tests import fake_noaa
 from tests.fake_noaa import FakeNOAA, bdeck_text, lcfa_bytes, quantize_area, quantize_energy
@@ -731,3 +731,103 @@ def test_range_file(world):
     assert f.read(100) == body[-10:] and f.tell() == len(body)
     with pytest.raises(FileNotFoundError):
         remote.RangeFile(config.GLM_URL.format(bucket="noaa-goes16") + "/nothing")
+
+
+def test_env_live_update_reads_only_what_is_new(envworld, monkeypatch):
+    """A real-time update keeps the scans it has, reads the new ones, and asks about ERA5 only when it can be there."""
+    noaa, tmp = envworld
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp / "cache"))
+    monkeypatch.setattr(config, "IR_SHEET_FRAMES", 4)
+    start = dt("2026-09-30T00:00")
+    warm = lambda la, lo: 285.0 + 0 * la
+    put_scans(noaa, "19", start - timedelta(minutes=30), 40, warm)
+
+    # first update: the record is two hours long, ERA5 is too recent to ask about
+    prod = record("al932026", start, 2, 15.0, -50.0)
+    first, prior = env.build_live(prod, {}, log=lambda m: None, now=dt("2026-10-02T00:00"))
+    assert first["frames"] == 13 and first["abi_requests"] > 0 and first["vort_hours"] == 0 and first["era5_pending"]
+    assert first["era5_try"] is None and first["error"] == "" and first["t_end"] == int((start + timedelta(hours=2)).timestamp())
+    sheet0 = (tmp / "env/al932026_0.webp").read_bytes()
+
+    # an hour later: six more scans (the 00:00 scan before the window is kept), nothing already read is read again, the old sheets are byte for byte the same
+    longer = record("al932026", start, 3, 15.0, -50.0)
+    second, prior = env.build_live(longer, prior, log=lambda m: None, now=dt("2026-10-02T01:00"))
+    doc = json.loads((tmp / "env/al932026.json").read_text())
+    assert second["frames"] == 19 and len(doc["ir"]["t"]) == 19
+    assert second["abi_requests"] <= first["abi_requests"] / 13 * 6 * 1.5          # only the new scans
+    assert (tmp / "env/al932026_0.webp").read_bytes() == sheet0
+    assert doc["ir"]["sheets"] == [f"al932026_{k}.webp" for k in range(5)]
+
+    # a centre that was revised by more than a few km gets those frames read again
+    moved = record("al932026", start, 3, 15.5, -50.0)
+    third, prior = env.build_live(moved, prior, log=lambda m: None, now=dt("2026-10-02T02:00"))
+    assert third["abi_requests"] >= first["abi_requests"] / 13 * 19 * 0.8 and third["frames"] == 19
+
+    # 20 days on, NCAR still has not published: one try is made and recorded, then none until the retry time
+    key = fake_noaa.era5_key(start)
+    late = dt("2026-10-20T00:00")
+    fourth, prior = env.build_live(moved, prior, log=lambda m: None, now=late)
+    assert fourth["era5_pending"] and fourth["era5_try"] == int(late.timestamp()) and fourth["vort_hours"] == 0
+    again, prior = env.build_live(moved, prior, log=lambda m: None, now=late + timedelta(hours=3))
+    assert again["era5_try"] == int(late.timestamp()) and again["era5_mb"] == 0 and again["abi_requests"] == 0
+
+    # once the day is there the vorticity is added; the images are not read again
+    noaa.objects.setdefault("nsf-ncar-era5", {})[key] = fake_noaa.era5_bytes(start, linear_vo)
+    era5._HELD.clear()
+    fifth, prior = env.build_live(moved, prior, log=lambda m: None, now=late + timedelta(hours=26))
+    doc = json.loads((tmp / "env/al932026.json").read_text())
+    assert fifth["vort_hours"] == 4 and not fifth["era5_pending"] and fifth["abi_requests"] == 0
+    assert doc["vort"]["have"] == [1, 1, 1, 1] and doc["vort"]["mean_low"][0] is not None
+    assert prior["samples"] and len(prior["frames"]) == 19
+
+
+def test_env_live_plan():
+    now = dt("2026-11-15T12:00")
+    t = lambda h: int((now - timedelta(hours=h)).timestamp())
+    storms = [{"id": "al942026_1104", "status": "ended", "t_end": t(400)}, {"id": "al932026_1110", "status": "active", "t_end": t(1)},
+              {"id": "al012026", "status": "ended", "t_end": t(900)}, {"id": "al022026", "status": "ended", "t_end": t(800)},
+              {"id": "ep012026", "status": "ended", "t_end": t(700)}, {"id": "ep022026", "status": "ended", "t_end": t(100)}]
+    done = lambda **kw: {"frames": 5, "hours": 3, "vort_hours": 0, "error": "", **kw}
+    live = {"al942026_1104": done(t_end=t(400), era5_pending=True), "gone": done(), "ep022026": done(t_end=t(50), era5_pending=True)}
+    archive = {"al012026": done(), "al022026": done(vort_hours=3)}
+    todo, remove = run_env_live.plan(storms, live, archive, now)
+    # the active storm first; ended ones with no infrared anywhere or whose window changed; archived ones are left alone
+    assert todo == ["al932026_1110", "ep022026", "al942026_1104", "ep012026"] and remove == ["gone"]      # newest first; al94 has never asked about ERA5
+    # an archive copy with at least as much vorticity replaces the live one
+    todo, remove = run_env_live.plan(storms, dict(live, al022026=done(vort_hours=2, t_end=t(800))), archive, now)
+    assert "al022026" in remove and "al022026" not in todo
+    # ERA5 retries: old enough and due
+    live["al942026_1104"]["era5_try"] = int(now.timestamp()) - 3 * 3600
+    assert "al942026_1104" not in run_env_live.plan(storms, live, archive, now)[0]
+    live["al942026_1104"]["era5_try"] = int(now.timestamp()) - 25 * 3600
+    assert "al942026_1104" in run_env_live.plan(storms, live, archive, now)[0]
+    # if the archive index cannot be read, ended records that have nothing are not started
+    todo, _ = run_env_live.plan(storms, live, None, now)
+    assert "ep012026" not in todo and "al932026_1110" in todo and "ep022026" in todo
+
+
+def test_env_live_run(envworld, monkeypatch):
+    noaa, tmp = envworld
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp / "cache"))
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp / "data"))
+    start = dt("2026-10-11T00:00")
+    put_scans(noaa, "19", start - timedelta(minutes=30), 20, lambda la, lo: 285.0 + 0 * la)
+    (tmp / "data/storms").mkdir(parents=True)
+    for key in ("al932026_1011", "al102026"):
+        (tmp / "data/storms" / f"{key}.json").write_text(json.dumps(record(key, start, 2, 15.0, -50.0)))
+    end = int((start + timedelta(hours=2)).timestamp())
+    (tmp / "data/index.json").write_text(json.dumps({"storms": [
+        {"id": "al932026_1011", "status": "active", "t_end": end, "label": "x"},
+        {"id": "al102026", "status": "ended", "t_end": end, "label": "x"}]}))
+    monkeypatch.setattr(process, "load_index", lambda: json.loads((tmp / "data/index.json").read_text()))
+    index = run_env_live.run(now=dt("2026-10-11T03:00"), archive={})
+    assert sorted(index["cases"]) == ["al102026", "al932026_1011"]
+    assert all(c["frames"] == 13 and not c["error"] for c in index["cases"].values())
+    assert (tmp / "env/al932026_1011.json").exists() and (tmp / "cache/env/al932026_1011.pkl.gz").exists()
+    # the second run reuses the stored scans; the ended record is complete and is left alone
+    again = run_env_live.run(now=dt("2026-10-11T04:00"), archive={})
+    assert again["cases"]["al932026_1011"]["abi_requests"] == 0 and again["cases"]["al102026"]["updated"] == index["cases"]["al102026"]["updated"]
+    # once the archive has it, the live copy and its stored frames go
+    run_env_live.run(now=dt("2026-10-11T05:00"), archive={"al102026": dict(frames=12, hours=3, vort_hours=0, error="")})
+    assert not (tmp / "env/al102026.json").exists() and not (tmp / "cache/env/al102026.pkl.gz").exists()
+    assert "al102026" not in run_env.load_index()["cases"]
