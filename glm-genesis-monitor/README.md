@@ -246,7 +246,7 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
 | `window.GLM_LIVE_ENV_BASE` | Where the IR images of real-time systems live. Defaults to `GLM_DATA_BASE` + `env/`. The infrared panel is hidden only if neither base is set. |
 | `window.GLM_CCF_K` | Cold cloud threshold in K (one of 195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240). Default 240. |
 | `window.GLM_VORT_LEVELS` | Vorticity contour levels in 10⁻⁵ s⁻¹. Default `[5, 10, 20, 40]`. |
-| `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: gray above −30 °C, then blue, green, yellow, orange and red toward colder tops. It is applied in the browser, so changing it needs no reprocessing. |
+| `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: the CSU real-time longwave enhancement: gray above −30 °C, then blue, green, yellow, orange, red, purple and white toward colder tops, with gray again below −90 °C. Missing data is drawn as 35 °C. It is applied in the browser, so changing it needs no reprocessing. |
 | `window.GLM_DOMAINS` | Fixed ranges for the color scale and axes, e.g. `{ area: [60, 3000], energy: [0.5, 500], life: [5, 240] }`, so cases can be compared by eye. By default each record uses its own 2nd to 98th percentile range. |
 
 ## Data files

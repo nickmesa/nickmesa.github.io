@@ -19,13 +19,13 @@
   var ENV_BASES = EMBED ? [] : DEMO ? ['demo/env/'] : [window.GLM_LIVE_ENV_BASE || (window.GLM_DATA_BASE ? window.GLM_DATA_BASE + 'env/' : null), window.GLM_ENV_BASE].filter(Boolean);
   var CCF_K = window.GLM_CCF_K || 240;                         // cold cloud threshold (K); see config.CCF_THRESHOLDS_K
   var VORT_LEVELS = window.GLM_VORT_LEVELS || [5, 10, 20, 40]; // contours, 1e-5 s-1
-  // Enhanced infrared color scale of the kind used on tropical weather sites: gray for warm
-  // surfaces and low cloud, then blue, green, yellow, orange and red toward colder cloud tops.
-  // [brightness temperature in deg C, red, green, blue], warm to cold; colors between are blended.
+  // CSU real-time longwave IR enhancement: gray above -30 deg C, then blue, green, yellow, orange, red,
+  // purple, white and gray toward the coldest tops. [brightness temperature in deg C, red, green, blue],
+  // warm to cold; colors between are blended, and values outside the range take the end colors.
   var IR_COLORS = window.GLM_IR_COLORS || [
-    [40, 0, 0, 0], [-30, 255, 255, 255], [-38, 140, 222, 255], [-46, 0, 112, 255], [-52, 0, 48, 150],
-    [-54, 0, 140, 60], [-60, 60, 225, 40], [-63, 255, 255, 0], [-68, 255, 150, 0], [-73, 255, 0, 0],
-    [-80, 128, 0, 0], [-86, 0, 0, 0], [-90, 255, 255, 255], [-100, 205, 130, 255]
+    [35, 20, 20, 20], [-30, 210, 210, 210], [-31, 100, 180, 255], [-42, 0, 60, 220], [-52, 0, 190, 60],
+    [-62, 255, 230, 0], [-70, 255, 120, 0], [-76, 220, 0, 0], [-82, 140, 0, 90], [-90, 255, 255, 255],
+    [-100, 160, 160, 160]
   ];
   function irColor(celsius) {      // [r, g, b] for a brightness temperature
     var a = IR_COLORS, n = a.length;
@@ -197,7 +197,7 @@
     ks.forEach(function (k) { if (Math.abs(k - CCF_K) < Math.abs(best - CCF_K)) best = k; });
     var lut = new Uint8ClampedArray(256 * 3);
     for (var b = 0; b < 256; b++) lut.set(irColor(ir.tb_max - b * ir.tb_step - 273.15), b * 3);
-    lut[0] = lut[1] = lut[2] = 0;                                 // byte 0 also marks a bad pixel
+    lut.set(irColor(35), 0);                                       // byte 0 marks a bad pixel; missing data is drawn as 35 °C
     var cv = document.createElement('canvas');
     cv.width = cv.height = ir.px;
     return {
@@ -513,10 +513,10 @@
       d.appendChild(val);
       tiles.appendChild(d);
     }
-    tile('Lightning groups', fmtInt(groups));
-    tile('Features', fmtInt(count));
-    tile('Median group area', fmtVal(quantile(area, 0.5)), 'km²');
-    tile('Median group energy', fmtVal(quantile(energy, 0.5)), 'fJ');
+    tile('GLM groups', fmtInt(groups));
+    tile('tobac features', fmtInt(count));
+    tile('Median feature mean group area', fmtVal(quantile(area, 0.5)), 'km²');
+    tile('Median feature mean group energy', fmtVal(quantile(energy, 0.5)), 'fJ');
     tile('Median cell lifetime', fmtVal(quantile(lives, 0.5)), 'min');
     var end = S.t0 + st.cursor * S.dt, w = windowSteps(S) * S.dt;
     $('scope').textContent = 'From ' + fmtTime(end - w) + ' to ' + fmtTime(end) + ', within ' + S.p.method.radius_km + ' km of the center' +
@@ -758,11 +758,11 @@
     var item = el('span', { 'class': 'item' });
     item.appendChild(el('span', null, 'Brightness temp. (°C)'));
     var rb = el('span', { 'class': 'rampbox' }), bar = el('span', { 'class': 'ramp wide' }), ticks = el('span', { 'class': 'ticks wide' });
-    var warm = 30, cold = -90, stops = [];
-    for (var c = warm; c >= cold; c -= 2) stops.push('rgb(' + irColor(c).map(Math.round).join(',') + ') ' + ((warm - c) / (warm - cold) * 100).toFixed(1) + '%');
+    var warm = 35, cold = -100, stops = [];
+    for (var c = warm; c >= cold; c -= 2.5) stops.push('rgb(' + irColor(c).map(Math.round).join(',') + ') ' + ((warm - c) / (warm - cold) * 100).toFixed(1) + '%');
     bar.style.background = 'linear-gradient(to right,' + stops.join(',') + ')';
     bar.style.outline = '1px solid var(--line)';
-    [30, 0, -30, -60, -90].forEach(function (t) { ticks.appendChild(el('span', null, String(t).replace('-', '−'))); });
+    [35, -10, -55, -100].forEach(function (t) { ticks.appendChild(el('span', null, String(t).replace('-', '−'))); });
     rb.appendChild(bar); rb.appendChild(ticks); item.appendChild(rb); box.appendChild(item);
     if (E && E.anyVort) {
       var layers = E.doc.vort.layers;
@@ -917,10 +917,10 @@
   }
 
   var TS_ROWS = [
-    { key: 'groups', title: 'Lightning groups per bin', kind: 'bar' },
-    { key: 'feats', title: 'Features per bin', kind: 'bar' },
-    { key: 'area', title: 'Group area (km²): median and middle 50%', kind: 'band' },
-    { key: 'energy', title: 'Group energy (fJ): median and middle 50%', kind: 'band' }
+    { key: 'groups', title: 'GLM Group Count', kind: 'bar' },
+    { key: 'feats', title: 'tobac Lightning Feature Count', kind: 'bar' },
+    { key: 'area', title: 'Feature Mean Group Area (km²): median and middle 50%', kind: 'band' },
+    { key: 'energy', title: 'Feature Mean Group Energy (fJ): median and middle 50%', kind: 'band' }
   ];
 
   // Archived cases add two rows from the IR and ERA5 data: neither is a lightning quantity, so
@@ -1122,7 +1122,7 @@
 
   function renderTable(bins) {
     var S = st.S, table = clear($('ts-table')), head = el('tr'), E = st.tsGeom && st.tsGeom.E;
-    ['Bin start (UTC)', 'Groups', 'Features', 'Area p25', 'Area median', 'Area p75', 'Energy p25', 'Energy median', 'Energy p75', 'GLM coverage']
+    ['Bin start (UTC)', 'GLM groups', 'tobac features', 'Mean group area p25', 'Mean group area median', 'Mean group area p75', 'Mean group energy p25', 'Mean group energy median', 'Mean group energy p75', 'GLM coverage']
       .concat(E ? ['Low-level vorticity', 'Mid-level vorticity', 'Cold cloud ≤ ' + E.ccfK + ' K'] : []).forEach(function (h) { head.appendChild(el('th', null, h)); });
     table.appendChild(head);
     bins.forEach(function (b) {
@@ -1202,7 +1202,7 @@
   function featureTip(evt, i) {
     var S = st.S, rng = Math.hypot(S.x[i], S.y[i]), brg = (Math.atan2(S.x[i], S.y[i]) * 180 / Math.PI + 360) % 360;
     showTip(evt, fmtTime(S.t0 + S.k[i] * S.dt) + ' · ' + fmtLatLon(S.lat[i], S.lon[i]), [
-      ['Groups', fmtInt(S.g[i])], ['Mean group area', fmtVal(S.area[i]) + ' km²'], ['Mean group energy', fmtVal(S.energy[i]) + ' fJ'],
+      ['GLM groups', fmtInt(S.g[i])], ['Mean group area', fmtVal(S.area[i]) + ' km²'], ['Mean group energy', fmtVal(S.energy[i]) + ' fJ'],
       ['Cell lifetime', fmtInt(S.life[i]) + ' min'], ['From center', Math.round(rng) + ' km at ' + Math.round(brg) + '°']
     ].concat(S.land[i] ? [['Cell', 'near land']] : []));
   }
@@ -1237,7 +1237,7 @@
     var cx = Math.max(G.m.l, Math.min(G.m.l + G.pw, (G.XK(bin.k0) + G.XK(bin.k1)) / 2));
     hv.appendChild(el('line', { x1: cx, x2: cx, y1: G.top, y2: G.bottom, stroke: 'var(--ink-2)', 'stroke-width': 1 }));
     var a = bin.areaQ, e = bin.energyQ, t0 = S.t0 + bin.k0 * S.dt, rows = [
-      ['Groups', fmtInt(bin.groups)], ['Features', fmtInt(bin.feats)],
+      ['GLM groups', fmtInt(bin.groups)], ['tobac features', fmtInt(bin.feats)],
       ['Area', a ? fmtVal(a[1]) + ' km² (' + fmtVal(a[0]) + '–' + fmtVal(a[2]) + ')' : '–'],
       ['Energy', e ? fmtVal(e[1]) + ' fJ (' + fmtVal(e[0]) + '–' + fmtVal(e[2]) + ')' : '–'],
       ['GLM coverage', Math.round(bin.cover * 100) + '%' + (bin.partial ? ', partial bin' : '')]
