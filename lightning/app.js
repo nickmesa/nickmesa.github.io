@@ -42,8 +42,7 @@
   // Vertical wind shear (data/shear/<id>.json): 6-hourly area-mean vectors for two layers.
   var SHEAR_BASES = EMBED ? [] : DEMO ? ['demo/shear/'] : [window.GLM_SHEAR_BASE || (window.GLM_DATA_BASE ? window.GLM_DATA_BASE + 'shear/' : null)].filter(Boolean);
   var SHEAR_COLOR = '#c2410c';
-  var MOTION_REF_KT = 20;                         // storm motion on the maps: 20 kt is drawn 100 km long
-  var MS_TO_KT = 1.943844, SHEAR_REF_KT = 40, SHEAR_REF_KM = 100;     // on the maps, 40 kt is drawn 100 km long
+  var MS_TO_KT = 1.943844, ARROW_REF_KT = 20, ARROW_REF_KM = 100;     // storm motion and shear arrows on the maps: 20 kt is drawn 100 km long
 
   var VARS = {
     area: { label: 'Mean group area', short: 'Area', unit: 'km²', fallback: [60, 3000] },
@@ -252,12 +251,12 @@
   // Arrow from (x0, y0) in screen pixels; the length follows the reference (20 m/s = 100 km).
   function shearArrow(ctx, x0, y0, pxPerKm, sh) {
     if (!sh || !(sh.mag > 0.05)) return;
-    vectorArrow(ctx, x0, y0, Math.max(6, sh.mag * MS_TO_KT / SHEAR_REF_KT * SHEAR_REF_KM * pxPerKm), Math.atan2(sh.u, sh.v), SHEAR_COLOR);
+    vectorArrow(ctx, x0, y0, Math.max(6, sh.mag * MS_TO_KT / ARROW_REF_KT * ARROW_REF_KM * pxPerKm), Math.atan2(sh.u, sh.v), SHEAR_COLOR);
   }
   // Storm motion: black, 20 kt = 100 km.
   function motionArrow(ctx, x0, y0, pxPerKm, mv) {
     if (!mv || mv.still) return;
-    vectorArrow(ctx, x0, y0, Math.max(6, mv.kt / MOTION_REF_KT * SHEAR_REF_KM * pxPerKm), mv.hdg * Math.PI / 180, '#0e1620');
+    vectorArrow(ctx, x0, y0, Math.max(6, mv.kt / ARROW_REF_KT * ARROW_REF_KM * pxPerKm), mv.hdg * Math.PI / 180, '#0e1620');
   }
   function vectorArrow(ctx, x0, y0, len, ang, color) {
     var ex = x0 + len * Math.sin(ang), ey = y0 - len * Math.cos(ang), hs = Math.min(11, 5 + len / 8);
@@ -664,7 +663,7 @@
     var mv = motion(S, st.cursor - 1);
     ctx.strokeStyle = C.ink; ctx.fillStyle = C.ink; ctx.lineWidth = 1.5;
     if (mv && !mv.still) {
-      var len = Math.max(6, mv.kt / MOTION_REF_KT * SHEAR_REF_KM * s), ang = mv.hdg * Math.PI / 180, ex = X(0) + len * Math.sin(ang), ey = Y(0) - len * Math.cos(ang);
+      var len = Math.max(6, mv.kt / ARROW_REF_KT * ARROW_REF_KM * s), ang = mv.hdg * Math.PI / 180, ex = X(0) + len * Math.sin(ang), ey = Y(0) - len * Math.cos(ang);
       ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(ex, ey); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ex, ey);
       ctx.lineTo(ex - 8 * Math.sin(ang - 0.42), ey + 8 * Math.cos(ang - 0.42));
@@ -697,7 +696,7 @@
       ctx.fillText(shv ? shearLabel(st.shearLayer) + ' shear ' + shearText(shv) : shearLabel(st.shearLayer) + ' shear: none for this time', ox + 7, oy + 20);
       if (shv) ctx.fillText(srcName(shv.src), ox + 7, oy + 34);
     }
-    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + '; black arrow: motion, 20 kt = 100 km' + (st.SH ? '; orange arrow: shear, 40 kt = 100 km' : '');
+    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + '; arrows: motion (black)' + (st.SH ? ' and shear (orange)' : '') + ', 20 kt = 100 km';
   }
 
   function renderMapLegend() {
