@@ -42,6 +42,7 @@
   // Vertical wind shear (data/shear/<id>.json): 6-hourly area-mean vectors for two layers.
   var SHEAR_BASES = EMBED ? [] : DEMO ? ['demo/shear/'] : [window.GLM_SHEAR_BASE || (window.GLM_DATA_BASE ? window.GLM_DATA_BASE + 'shear/' : null)].filter(Boolean);
   var SHEAR_COLOR = '#c2410c';
+  var MOTION_REF_KT = 20;                         // storm motion on the maps: 20 kt is drawn 100 km long
   var MS_TO_KT = 1.943844, SHEAR_REF_KT = 40, SHEAR_REF_KM = 100;     // on the maps, 40 kt is drawn 100 km long
 
   var VARS = {
@@ -251,7 +252,14 @@
   // Arrow from (x0, y0) in screen pixels; the length follows the reference (20 m/s = 100 km).
   function shearArrow(ctx, x0, y0, pxPerKm, sh) {
     if (!sh || !(sh.mag > 0.05)) return;
-    var len = Math.max(6, sh.mag * MS_TO_KT / SHEAR_REF_KT * SHEAR_REF_KM * pxPerKm), ang = Math.atan2(sh.u, sh.v);
+    vectorArrow(ctx, x0, y0, Math.max(6, sh.mag * MS_TO_KT / SHEAR_REF_KT * SHEAR_REF_KM * pxPerKm), Math.atan2(sh.u, sh.v), SHEAR_COLOR);
+  }
+  // Storm motion: black, 20 kt = 100 km.
+  function motionArrow(ctx, x0, y0, pxPerKm, mv) {
+    if (!mv || mv.still) return;
+    vectorArrow(ctx, x0, y0, Math.max(6, mv.kt / MOTION_REF_KT * SHEAR_REF_KM * pxPerKm), mv.hdg * Math.PI / 180, '#0e1620');
+  }
+  function vectorArrow(ctx, x0, y0, len, ang, color) {
     var ex = x0 + len * Math.sin(ang), ey = y0 - len * Math.cos(ang), hs = Math.min(11, 5 + len / 8);
     var head = function () {
       ctx.beginPath(); ctx.moveTo(ex, ey);
@@ -262,7 +270,7 @@
     ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.lineWidth = 6;
     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(ex, ey); ctx.stroke(); head(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = SHEAR_COLOR; ctx.fillStyle = SHEAR_COLOR; ctx.lineWidth = 3;
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(ex, ey); ctx.stroke(); head(); ctx.fill();
     ctx.restore();
   }
@@ -656,7 +664,7 @@
     var mv = motion(S, st.cursor - 1);
     ctx.strokeStyle = C.ink; ctx.fillStyle = C.ink; ctx.lineWidth = 1.5;
     if (mv && !mv.still) {
-      var len = 46, ang = mv.hdg * Math.PI / 180, ex = X(0) + len * Math.sin(ang), ey = Y(0) - len * Math.cos(ang);
+      var len = Math.max(6, mv.kt / MOTION_REF_KT * SHEAR_REF_KM * s), ang = mv.hdg * Math.PI / 180, ex = X(0) + len * Math.sin(ang), ey = Y(0) - len * Math.cos(ang);
       ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(ex, ey); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ex, ey);
       ctx.lineTo(ex - 8 * Math.sin(ang - 0.42), ey + 8 * Math.cos(ang - 0.42));
@@ -689,7 +697,7 @@
       ctx.fillText(shv ? shearLabel(st.shearLayer) + ' shear ' + shearText(shv) : shearLabel(st.shearLayer) + ' shear: none for this time', ox + 7, oy + 20);
       if (shv) ctx.fillText(srcName(shv.src), ox + 7, oy + 34);
     }
-    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + (st.SH ? '; arrow: shear, 40 kt = 100 km' : '');
+    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + '; black arrow: motion, 20 kt = 100 km' + (st.SH ? '; orange arrow: shear, 40 kt = 100 km' : '');
   }
 
   function renderMapLegend() {
@@ -806,15 +814,19 @@
       }
       ctx.globalAlpha = 1;
     }
-    if (ready && st.SH) {
-      var shi = shearAt(S.t0 + st.cursor * S.dt);
+    if (ready) {
+      var mvi = motion(S, st.cursor - 1), shi = st.SH ? shearAt(S.t0 + st.cursor * S.dt) : null, lines = [];
+      motionArrow(ctx, X(0), Y(0), s, mvi);
       shearArrow(ctx, X(0), Y(0), s, shi);
+      if (mvi) lines.push([mvi.still ? 'stationary' : 'moving ' + pad(Math.round(mvi.hdg / 5) * 5 % 360).padStart(3, '0') + '° at ' + Math.round(mvi.kt) + ' kt', '#ffffff']);
+      if (st.SH) {
+        lines.push([shi ? shearLabel(st.shearLayer) + ' shear ' + shearText(shi) : shearLabel(st.shearLayer) + ' shear: none for this time', '#ffa05c']);
+        if (shi) lines.push([srcName(shi.src), '#ffa05c']);
+      }
       ctx.font = '11px ' + C.mono; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
-      var l1 = shi ? shearLabel(st.shearLayer) + ' shear ' + shearText(shi) : shearLabel(st.shearLayer) + ' shear: none for this time';
-      [[l1, 7], [shi ? srcName(shi.src) : '', 21]].forEach(function (ln) {
-        if (!ln[0]) return;
-        ctx.strokeStyle = 'rgba(8, 10, 14, 0.85)'; ctx.strokeText(ln[0], ox + 7, oy + ln[1]);
-        ctx.fillStyle = '#ffa05c'; ctx.fillText(ln[0], ox + 7, oy + ln[1]);
+      lines.forEach(function (ln, k) {
+        ctx.strokeStyle = 'rgba(8, 10, 14, 0.85)'; ctx.strokeText(ln[0], ox + 7, oy + 7 + 14 * k);
+        ctx.fillStyle = ln[1]; ctx.fillText(ln[0], ox + 7, oy + 7 + 14 * k);
       });
     }
     if (ready) cased(ctx, '#ffffff', 1.4, null, function () { ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); });
