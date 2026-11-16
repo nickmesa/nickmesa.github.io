@@ -244,8 +244,9 @@
     }
     return { u: u, v: v, mag: Math.hypot(u, v), hdg: (Math.atan2(u, v) * 180 / Math.PI + 360) % 360, src: src };
   }
-  function shearText(sh) {
-    return sh ? Math.round(sh.mag * MS_TO_KT) + ' kt toward ' + pad(Math.round(sh.hdg) % 360).padStart(3, '0') + '° (' + sh.src.toUpperCase() + ')' : '–';
+  function srcName(src) { return src === 'era5' ? 'ERA5 reanalysis' : 'GFS model analysis'; }
+  function shearText(sh, withSrc) {
+    return sh ? Math.round(sh.mag * MS_TO_KT) + ' kt toward ' + pad(Math.round(sh.hdg) % 360).padStart(3, '0') + '°' + (withSrc ? ' (' + srcName(sh.src) + ')' : '') : '–';
   }
   // Arrow from (x0, y0) in screen pixels; the length follows the reference (20 m/s = 100 km).
   function shearArrow(ctx, x0, y0, pxPerKm, sh) {
@@ -554,8 +555,10 @@
       var srcs = st.SH.src, nG = srcs.filter(function (x) { return x === 'gfs'; }).length, nE = srcs.length - nG;
       box.appendChild(el('p', null,
         'Vertical wind shear is the difference between the area-mean wind at the upper and lower level, averaged within ' + st.SH.radius_km +
-        ' km of the center: deep is 850 to 200 hPa and mid is 850 to 500 hPa, as in the paper. The arrow and the line show the speed in knots and the direction the shear vector points toward, from analyses every 6 hours (interpolated in time on the map). On the line, filled dots are ERA5 and open dots are GFS. ' +
-        (nE ? nE + ' analyses are ERA5' : '') + (nE && nG ? ' and ' : '') + (nG ? nG + ' are NCEP GFS 0.25° analyses, used until ERA5 is published and replaced then.' : '.')));
+        ' km of the center: deep is 850 to 200 hPa and mid is 850 to 500 hPa, as in the paper. The arrow and the line show the speed in knots and the direction the shear vector points toward, from analyses every 6 hours (interpolated in time on the maps). ' +
+        'On the line, filled dots are ERA5 and open dots are GFS. ' +
+        (nE ? nE + ' of the analyses are ERA5 reanalysis (ECMWF, 0.25°, hourly), the same dataset as the vorticity.' : '') +
+        (nG ? (nE ? ' ' : '') + nG + ' are GFS model analysis (NCEP Global Forecast System, 0.25°), the analysis time of the operational model, which is available within hours and is replaced by ERA5 once ERA5 is published. The two can differ by a few knots, and the operational GFS has been upgraded over the years.' : '')));
     }
   }
 
@@ -684,6 +687,7 @@
       ctx.font = '11px ' + C.mono; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
       ctx.fillStyle = SHEAR_COLOR;
       ctx.fillText(shv ? shearLabel(st.shearLayer) + ' shear ' + shearText(shv) : shearLabel(st.shearLayer) + ' shear: none for this time', ox + 7, oy + 20);
+      if (shv) ctx.fillText(srcName(shv.src), ox + 7, oy + 34);
     }
     $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + (st.SH ? '; arrow: shear, 40 kt = 100 km' : '');
   }
@@ -802,7 +806,17 @@
       }
       ctx.globalAlpha = 1;
     }
-    if (ready && st.SH) shearArrow(ctx, X(0), Y(0), s, shearAt(S.t0 + st.cursor * S.dt));
+    if (ready && st.SH) {
+      var shi = shearAt(S.t0 + st.cursor * S.dt);
+      shearArrow(ctx, X(0), Y(0), s, shi);
+      ctx.font = '11px ' + C.mono; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+      var l1 = shi ? shearLabel(st.shearLayer) + ' shear ' + shearText(shi) : shearLabel(st.shearLayer) + ' shear: none for this time';
+      [[l1, 7], [shi ? srcName(shi.src) : '', 21]].forEach(function (ln) {
+        if (!ln[0]) return;
+        ctx.strokeStyle = 'rgba(8, 10, 14, 0.85)'; ctx.strokeText(ln[0], ox + 7, oy + ln[1]);
+        ctx.fillStyle = '#ffa05c'; ctx.fillText(ln[0], ox + 7, oy + ln[1]);
+      });
+    }
     if (ready) cased(ctx, '#ffffff', 1.4, null, function () { ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); });
     ctx.font = '11px ' + C.mono; ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
     var a45 = Math.PI / 4, lx = X(R * Math.cos(a45)) + 4, ly = Y(R * Math.sin(a45)) - 2;
@@ -1108,7 +1122,7 @@
             g.appendChild(el('circle', { cx: X(p[0]), cy: yS(p[1]), r: era ? 2.8 : 3, fill: era ? SHEAR_COLOR : 'var(--panel)', stroke: SHEAR_COLOR, 'stroke-width': era ? 1 : 1.6 }));
           });
           var has = function (k) { return SH.src.indexOf(k) >= 0; };
-          var key = (has('era5') ? '●\u00a0ERA5' : '') + (has('era5') && has('gfs') ? '  ' : '') + (has('gfs') ? '○\u00a0GFS' : '');
+          var key = (has('era5') ? '●\u00a0ERA5' + (pw > 700 ? '\u00a0reanalysis' : '') : '') + (has('era5') && has('gfs') ? '  ' : '') + (has('gfs') ? '○\u00a0GFS' + (pw > 700 ? '\u00a0model\u00a0analysis' : '') : '');
           var lab = E ? (pw < 520 ? 'shear (kt)  ' : shearLabel(st.shearLayer) + ' shear (kt, right axis)  ') + key : key;
           g.appendChild(el('text', { x: m.l + pw, y: y0 - 6, 'text-anchor': 'end', fill: SHEAR_COLOR, 'font-size': 10.5 }, lab));
           any = any || sp.length > 0;
@@ -1234,7 +1248,7 @@
       }
       if (st.SH) {
         var tm = S.t0 + (b.k0 + b.k1) / 2 * S.dt;
-        ['deep', 'mid'].forEach(function (ly) { var q = shearAt(tm, ly); extra.push(q ? String(Math.round(q.mag * MS_TO_KT)) : '–', q ? String(Math.round(q.hdg) % 360) : '–', q ? q.src.toUpperCase() : '–'); });
+        ['deep', 'mid'].forEach(function (ly) { var q = shearAt(tm, ly); extra.push(q ? String(Math.round(q.mag * MS_TO_KT)) : '–', q ? String(Math.round(q.hdg) % 360) : '–', q ? srcName(q.src) : '–'); });
       }
       [fmtTime(S.t0 + b.k0 * S.dt, true), fmtInt(b.groups), fmtInt(b.feats), fmtVal(a[0]), fmtVal(a[1]), fmtVal(a[2]), fmtVal(e[0]), fmtVal(e[1]), fmtVal(e[2]), Math.round(b.cover * 100) + '%']
         .concat(extra).forEach(function (v) { tr.appendChild(el('td', null, v)); });
@@ -1354,7 +1368,7 @@
     }
     if (st.SH) {
       var tmid = t0 + st.bin * S.dt / 2;
-      ['deep', 'mid'].forEach(function (ly) { rows.push([(ly === 'deep' ? 'Deep' : 'Mid') + ' shear ' + shearLabel(ly), shearText(shearAt(tmid, ly))]); });
+      ['deep', 'mid'].forEach(function (ly) { rows.push([(ly === 'deep' ? 'Deep' : 'Mid') + ' shear ' + shearLabel(ly), shearText(shearAt(tmid, ly), true)]); });
     }
     if (S.genesis) rows.unshift(['Before genesis', ((S.genesis - t0) / 3600).toFixed(1) + ' h']);
     showTip(evt, fmtTime(t0) + ' to ' + fmtTime(t0 + st.bin * S.dt), rows);

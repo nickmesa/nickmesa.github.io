@@ -289,7 +289,7 @@ Not an official forecast product. See https://www.nhc.noaa.gov/ for outlooks and
 
 `python -m pipeline.shear` writes `<shear dir>/<id>.json` for each record: deep (850 to 200 hPa) and mid (850 to 500 hPa) shear as the area mean within 300 km of the center, the same definition as the `BEST_b*.nc` files of the paper. Values are the u and v components (m/s) of upper minus lower wind every 6 hours, so a vector points downshear; the page works out speed (shown in knots) and direction and interpolates in time. Each time keeps its source (`gfs` or `era5`).
 
-* **GFS** (NOAA open data, `s3://noaa-gfs-bdp-pds`, 0.25 degree analyses, from 2021) is read about 5 hours after each analysis time, with range requests for the six wind messages only (`eccodes` decodes them). It is what active storms use.
-* **ERA5** (`e5.oper.an.pl` u and v) replaces a GFS value once it is published (older than `ERA5_MIN_AGE_DAYS`; asked about once a day). A stored value is kept while the center moves less than `SHEAR_REUSE_KM`.
+* **GFS model analysis** (NCEP Global Forecast System, NOAA open data, `s3://noaa-gfs-bdp-pds`, 0.25 degree analyses, from 2021) is read about 5 hours after each analysis time, with range requests for the six wind messages only (`eccodes` decodes them). It is what active storms use.
+* **ERA5 reanalysis** (ECMWF, NCAR copy, `e5.oper.an.pl` u and v) replaces a GFS value once it is published (older than `ERA5_MIN_AGE_DAYS`; asked about once a day). A stored value is kept while the center moves less than `SHEAR_REUSE_KM`.
 * The real-time workflow runs it after the infrared step with `GLM_SHEAR_DIR=public/data/shear`, and the page reads `window.GLM_SHEAR_BASE` (default `<data base>/shear/`). Records that have ended and have no file yet are done a few per run (`SHEAR_ENDED_PER_RUN`).
 * The ERA5 file names (`...128_131_u.ll025uv...`, `...128_132_v.ll025uv...`) follow NCAR's layout but were tested only against stand-in files; check the first run's log.
