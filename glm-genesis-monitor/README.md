@@ -287,7 +287,7 @@ Not an official forecast product. See https://www.nhc.noaa.gov/ for outlooks and
 
 ## Vertical wind shear
 
-`python -m pipeline.shear` writes `<shear dir>/<id>.json` for each record: deep (850 to 200 hPa) and mid (850 to 500 hPa) shear as the area mean within 300 km of the center, the same definition as the `BEST_b*.nc` files of the paper. Values are the u and v components (m/s) of upper minus lower wind every 6 hours, so a vector points downshear; the page works out speed and direction and interpolates in time. Each time keeps its source (`gfs` or `era5`).
+`python -m pipeline.shear` writes `<shear dir>/<id>.json` for each record: deep (850 to 200 hPa) and mid (850 to 500 hPa) shear as the area mean within 300 km of the center, the same definition as the `BEST_b*.nc` files of the paper. Values are the u and v components (m/s) of upper minus lower wind every 6 hours, so a vector points downshear; the page works out speed (shown in knots) and direction and interpolates in time. Each time keeps its source (`gfs` or `era5`).
 
 * **GFS** (NOAA open data, `s3://noaa-gfs-bdp-pds`, 0.25 degree analyses, from 2021) is read about 5 hours after each analysis time, with range requests for the six wind messages only (`eccodes` decodes them). It is what active storms use.
 * **ERA5** (`e5.oper.an.pl` u and v) replaces a GFS value once it is published (older than `ERA5_MIN_AGE_DAYS`; asked about once a day). A stored value is kept while the center moves less than `SHEAR_REUSE_KM`.

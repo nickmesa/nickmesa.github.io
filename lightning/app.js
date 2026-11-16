@@ -42,7 +42,7 @@
   // Vertical wind shear (data/shear/<id>.json): 6-hourly area-mean vectors for two layers.
   var SHEAR_BASES = EMBED ? [] : DEMO ? ['demo/shear/'] : [window.GLM_SHEAR_BASE || (window.GLM_DATA_BASE ? window.GLM_DATA_BASE + 'shear/' : null)].filter(Boolean);
   var SHEAR_COLOR = '#c2410c';
-  var SHEAR_REF_MS = 20, SHEAR_REF_KM = 100;     // on the maps, 20 m/s is drawn 100 km long
+  var MS_TO_KT = 1.943844, SHEAR_REF_KT = 40, SHEAR_REF_KM = 100;     // on the maps, 40 kt is drawn 100 km long
 
   var VARS = {
     area: { label: 'Mean group area', short: 'Area', unit: 'km²', fallback: [60, 3000] },
@@ -245,12 +245,12 @@
     return { u: u, v: v, mag: Math.hypot(u, v), hdg: (Math.atan2(u, v) * 180 / Math.PI + 360) % 360, src: src };
   }
   function shearText(sh) {
-    return sh ? sh.mag.toFixed(1) + ' m/s toward ' + pad(Math.round(sh.hdg) % 360).padStart(3, '0') + '°' : '–';
+    return sh ? Math.round(sh.mag * MS_TO_KT) + ' kt toward ' + pad(Math.round(sh.hdg) % 360).padStart(3, '0') + '° (' + sh.src.toUpperCase() + ')' : '–';
   }
   // Arrow from (x0, y0) in screen pixels; the length follows the reference (20 m/s = 100 km).
   function shearArrow(ctx, x0, y0, pxPerKm, sh) {
     if (!sh || !(sh.mag > 0.05)) return;
-    var len = Math.max(6, sh.mag / SHEAR_REF_MS * SHEAR_REF_KM * pxPerKm), ang = Math.atan2(sh.u, sh.v);
+    var len = Math.max(6, sh.mag * MS_TO_KT / SHEAR_REF_KT * SHEAR_REF_KM * pxPerKm), ang = Math.atan2(sh.u, sh.v);
     var ex = x0 + len * Math.sin(ang), ey = y0 - len * Math.cos(ang), hs = Math.min(11, 5 + len / 8);
     var head = function () {
       ctx.beginPath(); ctx.moveTo(ex, ey);
@@ -554,7 +554,7 @@
       var srcs = st.SH.src, nG = srcs.filter(function (x) { return x === 'gfs'; }).length, nE = srcs.length - nG;
       box.appendChild(el('p', null,
         'Vertical wind shear is the difference between the area-mean wind at the upper and lower level, averaged within ' + st.SH.radius_km +
-        ' km of the center: deep is 850 to 200 hPa and mid is 850 to 500 hPa, as in the paper. The arrow and the line show the speed and the direction the shear vector points toward, from analyses every 6 hours (interpolated in time on the map). ' +
+        ' km of the center: deep is 850 to 200 hPa and mid is 850 to 500 hPa, as in the paper. The arrow and the line show the speed in knots and the direction the shear vector points toward, from analyses every 6 hours (interpolated in time on the map). On the line, filled dots are ERA5 and open dots are GFS. ' +
         (nE ? nE + ' analyses are ERA5' : '') + (nE && nG ? ' and ' : '') + (nG ? nG + ' are NCEP GFS 0.25° analyses, used until ERA5 is published and replaced then.' : '.')));
     }
   }
@@ -685,7 +685,7 @@
       ctx.fillStyle = SHEAR_COLOR;
       ctx.fillText(shv ? shearLabel(st.shearLayer) + ' shear ' + shearText(shv) : shearLabel(st.shearLayer) + ' shear: none for this time', ox + 7, oy + 20);
     }
-    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + (st.SH ? '; arrow: shear, 20 m/s = 100 km' : '');
+    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + (st.SH ? '; arrow: shear, 40 kt = 100 km' : '');
   }
 
   function renderMapLegend() {
@@ -1043,7 +1043,7 @@
 
     ROWS.forEach(function (row, ri) {
       var y0 = m.t + ri * (rowH + gap) + 16, y1 = y0 + rowH, g = el('g');
-      var title = row.kind === 'ccf' ? (E ? row.title + ': channel 13 at or below ' + E.ccfK + ' K' : 'Vertical wind shear, ' + shearLabel(st.shearLayer) + ', within ' + (SH ? SH.radius_km : 300) + ' km (m/s)') : row.title;
+      var title = row.kind === 'ccf' ? (E ? row.title + ': channel 13 at or below ' + E.ccfK + ' K' : 'Vertical wind shear, ' + shearLabel(st.shearLayer) + ', within ' + (SH ? SH.radius_km : 300) + ' km (kt)') : row.title;
       g.appendChild(el('text', { x: m.l, y: y0 - 6, fill: 'var(--ink-2)', 'font-size': 11.5, style: 'font-family:var(--sans)' }, title));
       ticks.forEach(function (tk) { g.appendChild(el('line', { x1: X(tk), x2: X(tk), y1: y0, y2: y1, stroke: 'var(--grid)' })); });
       var yOf, yTicks;
@@ -1089,8 +1089,8 @@
           });
         }
         if (row.kind === 'ccf' && SH) {         // shear on its own axis at the right, drawn over the cloud fraction
-          var shMax = 10, pts = SH.t.map(function (t, i) {
-            var u = SH[st.shearLayer].u[i], v = SH[st.shearLayer].v[i]; return [t, Math.hypot(u, v)];
+          var shMax = 20, pts = SH.t.map(function (t, i) {
+            var u = SH[st.shearLayer].u[i], v = SH[st.shearLayer].v[i]; return [t, Math.hypot(u, v) * MS_TO_KT, SH.src[i]];
           });
           pts.forEach(function (p) { shMax = Math.max(shMax, p[1]); });
           shMax = nice125(shMax, true);
@@ -1104,10 +1104,13 @@
           });
           sp.forEach(function (p, i) {
             if (p[0] < tA || p[0] > tB) return;
-            g.appendChild(el('circle', { cx: X(p[0]), cy: yS(p[1]), r: 2.6, fill: SHEAR_COLOR, stroke: 'var(--panel)', 'stroke-width': 1 }));
+            var era = p[2] === 'era5';      // filled dot: ERA5, open dot: GFS
+            g.appendChild(el('circle', { cx: X(p[0]), cy: yS(p[1]), r: era ? 2.8 : 3, fill: era ? SHEAR_COLOR : 'var(--panel)', stroke: SHEAR_COLOR, 'stroke-width': era ? 1 : 1.6 }));
           });
-          var lab = E ? (pw < 520 ? 'shear (m/s)' : shearLabel(st.shearLayer) + ' shear (m/s, right axis)') : shearLabel(st.shearLayer) + ' shear';
-          if (E) g.appendChild(el('text', { x: m.l + pw, y: y0 - 6, 'text-anchor': 'end', fill: SHEAR_COLOR, 'font-size': 10.5 }, lab));
+          var has = function (k) { return SH.src.indexOf(k) >= 0; };
+          var key = (has('era5') ? '●\u00a0ERA5' : '') + (has('era5') && has('gfs') ? '  ' : '') + (has('gfs') ? '○\u00a0GFS' : '');
+          var lab = E ? (pw < 520 ? 'shear (kt)  ' : shearLabel(st.shearLayer) + ' shear (kt, right axis)  ') + key : key;
+          g.appendChild(el('text', { x: m.l + pw, y: y0 - 6, 'text-anchor': 'end', fill: SHEAR_COLOR, 'font-size': 10.5 }, lab));
           any = any || sp.length > 0;
         }
         if (!any) g.appendChild(el('text', { x: m.l + pw / 2, y: (y0 + y1) / 2 + 4, 'text-anchor': 'middle', fill: 'var(--muted)', 'font-size': 11, style: 'font-family:var(--sans)' },
@@ -1221,7 +1224,7 @@
   function renderTable(bins) {
     var S = st.S, table = clear($('ts-table')), head = el('tr'), E = st.tsGeom && st.tsGeom.E;
     ['Bin start (UTC)', 'GLM groups', 'tobac features', 'Mean group area p25', 'Mean group area median', 'Mean group area p75', 'Mean group energy p25', 'Mean group energy median', 'Mean group energy p75', 'GLM coverage']
-      .concat(E ? ['Low-level vorticity', 'Mid-level vorticity', 'Cold cloud ≤ ' + E.ccfK + ' K'] : [], st.SH ? ['Deep shear (m/s)', 'Deep shear toward (°)', 'Mid shear (m/s)', 'Mid shear toward (°)'] : []).forEach(function (h) { head.appendChild(el('th', null, h)); });
+      .concat(E ? ['Low-level vorticity', 'Mid-level vorticity', 'Cold cloud ≤ ' + E.ccfK + ' K'] : [], st.SH ? ['Deep shear (kt)', 'Deep shear toward (°)', 'Deep shear source', 'Mid shear (kt)', 'Mid shear toward (°)', 'Mid shear source'] : []).forEach(function (h) { head.appendChild(el('th', null, h)); });
     table.appendChild(head);
     bins.forEach(function (b) {
       var tr = el('tr'), a = b.areaQ || [NaN, NaN, NaN], e = b.energyQ || [NaN, NaN, NaN], extra = [];
@@ -1231,7 +1234,7 @@
       }
       if (st.SH) {
         var tm = S.t0 + (b.k0 + b.k1) / 2 * S.dt;
-        ['deep', 'mid'].forEach(function (ly) { var q = shearAt(tm, ly); extra.push(q ? q.mag.toFixed(1) : '–', q ? String(Math.round(q.hdg) % 360) : '–'); });
+        ['deep', 'mid'].forEach(function (ly) { var q = shearAt(tm, ly); extra.push(q ? String(Math.round(q.mag * MS_TO_KT)) : '–', q ? String(Math.round(q.hdg) % 360) : '–', q ? q.src.toUpperCase() : '–'); });
       }
       [fmtTime(S.t0 + b.k0 * S.dt, true), fmtInt(b.groups), fmtInt(b.feats), fmtVal(a[0]), fmtVal(a[1]), fmtVal(a[2]), fmtVal(e[0]), fmtVal(e[1]), fmtVal(e[2]), Math.round(b.cover * 100) + '%']
         .concat(extra).forEach(function (v) { tr.appendChild(el('td', null, v)); });
