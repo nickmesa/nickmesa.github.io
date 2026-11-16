@@ -66,6 +66,14 @@ jobs:
           GLM_ARCHIVE_ENV_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/glm-env/env/index.json
         run: python -m pipeline.run_env_live
 
+      # Deep and mid-level shear (GFS analyses now, ERA5 when published), beside the lightning on glm-data.
+      - name: Update shear
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          GLM_SHEAR_DIR: public/data/shear
+        run: python -m pipeline.shear
+
       - uses: actions/cache/save@v4
         if: always()
         with:

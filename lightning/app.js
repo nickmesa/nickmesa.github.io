@@ -39,6 +39,10 @@
     return a[n - 1].slice(1);
   }
   var REFRESH_MS = 10 * 60 * 1000;
+  // Vertical wind shear (data/shear/<id>.json): 6-hourly area-mean vectors for two layers.
+  var SHEAR_BASES = EMBED ? [] : DEMO ? ['demo/shear/'] : [window.GLM_SHEAR_BASE || (window.GLM_DATA_BASE ? window.GLM_DATA_BASE + 'shear/' : null)].filter(Boolean);
+  var SHEAR_COLOR = '#c2410c';
+  var SHEAR_REF_MS = 20, SHEAR_REF_KM = 100;     // on the maps, 20 m/s is drawn 100 km long
 
   var VARS = {
     area: { label: 'Mean group area', short: 'Area', unit: 'km²', fallback: [60, 3000] },
@@ -54,7 +58,7 @@
   // ------------------------------------------------------------------- state
   var st = {
     index: null, mode: 'realtime', id: null, S: null, coast: null,
-    cursor: 1, win: 6, colorBy: 'area', bin: 12, land: false, playing: false, hover: -1, C: {},
+    shearLayer: 'deep', SH: null, cursor: 1, win: 6, colorBy: 'area', bin: 12, land: false, playing: false, hover: -1, C: {},
     envIndex: null, E: null, irLightning: true
   };
   var $ = function (id) { return document.getElementById(id); };
@@ -216,9 +220,61 @@
       .then(function (doc) { if (st.id === id) { st.E = prepareEnv(doc); st.E.base = base; st.E.stamp = stamp; } })
       .catch(function () { if (st.id === id && (!st.E || st.E.doc.id !== id)) st.E = null; });
   }
+  // ---------------------------------------------------------------- shear
+  function loadShear(id) {
+    if (!SHEAR_BASES.length) return Promise.resolve();
+    return fetch(SHEAR_BASES[0] + id + '.json', { cache: 'no-cache' })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(function (doc) { if (st.id === id && doc && doc.t && doc.t.length) st.SH = doc; else if (st.id === id) st.SH = null; })
+      .catch(function () { if (st.id === id) st.SH = null; });
+  }
+  function shearLabel(layer) { var l = (st.SH && st.SH.layers || { deep: [850, 200], mid: [850, 500] })[layer]; return l[0] + '–' + l[1] + ' hPa'; }
+  // Shear vector at a time, linearly interpolated between analyses; null outside the span (3 h of slack at the ends).
+  function shearAt(t, layer) {
+    var H = st.SH; if (!H) return null;
+    layer = layer || st.shearLayer;
+    var T = H.t, n = T.length, L = H[layer], i = lowerBound(T, t + 1) - 1, u, v, src;
+    if (i < 0) { if (T[0] - t > 3 * 3600) return null; i = 0; u = L.u[0]; v = L.v[0]; src = H.src[0]; }
+    else if (i >= n - 1) { if (t - T[n - 1] > 3 * 3600) return null; u = L.u[n - 1]; v = L.v[n - 1]; src = H.src[n - 1]; }
+    else {
+      var f = (t - T[i]) / (T[i + 1] - T[i]);
+      if (T[i + 1] - T[i] > 7 * 3600) f = f < 0.5 ? 0 : 1;      // a gap in the analyses: do not bridge it
+      u = L.u[i] + (L.u[i + 1] - L.u[i]) * f; v = L.v[i] + (L.v[i + 1] - L.v[i]) * f;
+      src = H.src[f < 0.5 ? i : i + 1];
+    }
+    return { u: u, v: v, mag: Math.hypot(u, v), hdg: (Math.atan2(u, v) * 180 / Math.PI + 360) % 360, src: src };
+  }
+  function shearText(sh) {
+    return sh ? sh.mag.toFixed(1) + ' m/s toward ' + pad(Math.round(sh.hdg) % 360).padStart(3, '0') + '°' : '–';
+  }
+  // Arrow from (x0, y0) in screen pixels; the length follows the reference (20 m/s = 100 km).
+  function shearArrow(ctx, x0, y0, pxPerKm, sh) {
+    if (!sh || !(sh.mag > 0.05)) return;
+    var len = Math.max(6, sh.mag / SHEAR_REF_MS * SHEAR_REF_KM * pxPerKm), ang = Math.atan2(sh.u, sh.v);
+    var ex = x0 + len * Math.sin(ang), ey = y0 - len * Math.cos(ang), hs = Math.min(11, 5 + len / 8);
+    var head = function () {
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - hs * Math.sin(ang - 0.45), ey + hs * Math.cos(ang - 0.45));
+      ctx.lineTo(ex - hs * Math.sin(ang + 0.45), ey + hs * Math.cos(ang + 0.45));
+      ctx.closePath();
+    };
+    ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(ex, ey); ctx.stroke(); head(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = SHEAR_COLOR; ctx.fillStyle = SHEAR_COLOR; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(ex, ey); ctx.stroke(); head(); ctx.fill();
+    ctx.restore();
+  }
+  function renderShearControl() {
+    var box = $('ctl-shear'); if (!box) return;
+    box.hidden = !st.SH;
+    if (st.SH) segmented('seg-shear', [['deep', shearLabel('deep').replace(' hPa', '')], ['mid', shearLabel('mid').replace(' hPa', '')]],
+      function () { return st.shearLayer; }, function (v) { st.shearLayer = v; renderAll(); });
+  }
   // after the index is refreshed: load newer images for the system on screen
   function refreshEnv() {
     var id = st.id;
+    if (id && st.S && SHEAR_BASES.length) { var was = st.SH && st.SH.updated; loadShear(id).then(function () { if (st.id === id && (st.SH && st.SH.updated) !== was) { renderMethod(); renderAll(); } }); }
     if (!id || !st.S || !hasEnv(id) || (st.E && st.E.doc.id === id && st.E.stamp === envStamp(id))) return;
     loadEnv(id).then(function () { if (st.id === id) { renderMethod(); renderAll(); } });
   }
@@ -424,6 +480,7 @@
     renderList();
     return getJSON('storms/' + id + '.json').then(function (p) {
       if (st.id !== id) return;
+      if (st.SH && st.SH.id !== id) st.SH = null;
       var wasEnd = st.S && st.cursor >= st.S.ns;
       var sameEnv = keepView && st.E && st.E.doc.id === id && st.E.stamp === envStamp(id);
       st.S = prepare(p);
@@ -438,6 +495,7 @@
       renderHeadline();
       renderMethod();
       renderAll();
+      loadShear(id).then(function () { if (st.id === id) { renderMethod(); renderAll(); } });
       if (env && !sameEnv) loadEnv(id).then(function () { if (st.id === id) { renderMethod(); renderAll(); } });
     }).catch(function (err) {
       $('detail').hidden = true;
@@ -491,6 +549,13 @@
         '); the time series is its mean within ' + v.radius_km + ' km of the center, weighted by the cosine of latitude.' +
         (st.E.anyVort && v.have.indexOf(0) >= 0 ? ' ERA5 is not available for part of this record.' : '') +
         (!st.E.anyVort ? ' ERA5 has not been published for this period yet, so there are no vorticity contours.' : '')));
+    }
+    if (st.SH) {
+      var srcs = st.SH.src, nG = srcs.filter(function (x) { return x === 'gfs'; }).length, nE = srcs.length - nG;
+      box.appendChild(el('p', null,
+        'Vertical wind shear is the difference between the area-mean wind at the upper and lower level, averaged within ' + st.SH.radius_km +
+        ' km of the center: deep is 850 to 200 hPa and mid is 850 to 500 hPa, as in the paper. The arrow and the line show the speed and the direction the shear vector points toward, from analyses every 6 hours (interpolated in time on the map). ' +
+        (nE ? nE + ' analyses are ERA5' : '') + (nE && nG ? ' and ' : '') + (nG ? nG + ' are NCEP GFS 0.25° analyses, used until ERA5 is published and replaced then.' : '.')));
     }
   }
 
@@ -596,6 +661,8 @@
       ctx.closePath(); ctx.fill();
     }
     ctx.beginPath(); ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); ctx.stroke();
+    var shv = shearAt(S.t0 + st.cursor * S.dt);
+    shearArrow(ctx, X(0), Y(0), s, shv);
     if (st.hover >= 0 && st.hover >= r[0] && st.hover < r[1]) {
       ctx.strokeStyle = C.cursor; ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.arc(X(S.x[st.hover]), Y(S.y[st.hover]), dotRadius(S.g[st.hover]) + 3, 0, 2 * Math.PI); ctx.stroke();
@@ -613,7 +680,12 @@
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(mv ? (mv.still ? 'stationary' : 'moving ' + pad(Math.round(mv.hdg / 5) * 5 % 360).padStart(3, '0') + '° at ' + Math.round(mv.kt) + ' kt') : '', ox + 7, oy + 6);
 
-    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter';
+    if (st.SH) {
+      ctx.font = '11px ' + C.mono; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillStyle = SHEAR_COLOR;
+      ctx.fillText(shv ? shearLabel(st.shearLayer) + ' shear ' + shearText(shv) : shearLabel(st.shearLayer) + ' shear: none for this time', ox + 7, oy + 20);
+    }
+    $('map-sub').textContent = 'each dot is one feature in one 5-minute period; older dots are fainter' + (st.SH ? '; arrow: shear, 20 m/s = 100 km' : '');
   }
 
   function renderMapLegend() {
@@ -730,6 +802,7 @@
       }
       ctx.globalAlpha = 1;
     }
+    if (ready && st.SH) shearArrow(ctx, X(0), Y(0), s, shearAt(S.t0 + st.cursor * S.dt));
     if (ready) cased(ctx, '#ffffff', 1.4, null, function () { ctx.moveTo(X(0) - 6, Y(0)); ctx.lineTo(X(0) + 6, Y(0)); ctx.moveTo(X(0), Y(0) - 6); ctx.lineTo(X(0), Y(0) + 6); });
     ctx.font = '11px ' + C.mono; ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
     var a45 = Math.PI / 4, lx = X(R * Math.cos(a45)) + 4, ly = Y(R * Math.sin(a45)) - 2;
@@ -947,8 +1020,9 @@
 
   function renderTS() {
     var S = st.S, svg = clear($('ts')), W = Math.max(300, Math.round($('ts-wrap').getBoundingClientRect().width));
-    var E = st.E && $('ir-panel') && !$('ir-panel').hidden ? st.E : null, ROWS = TS_ROWS.concat(E ? ENV_ROWS : []);
-    var m = { l: 46, r: 14, t: S.genesis ? 26 : 10 }, rowH = 78, gap = 26, pw = W - m.l - m.r;
+    var E = st.E && $('ir-panel') && !$('ir-panel').hidden ? st.E : null, SH = st.SH && $('ir-panel') && !$('ir-panel').hidden ? st.SH : null;
+    var ROWS = TS_ROWS.concat(E ? [ENV_ROWS[0]] : [], E || SH ? [ENV_ROWS[1]] : []);
+    var m = { l: 46, r: SH ? 34 : 14, t: S.genesis ? 26 : 10 }, rowH = 78, gap = 26, pw = W - m.l - m.r;
     var bins = binSeries(S), tA = S.t0, tB = S.t0 + S.ns * S.dt;
     var X = function (t) { return m.l + (t - tA) / (tB - tA) * pw; }, XK = function (k) { return X(S.t0 + k * S.dt); };
     var qualityY = m.t + ROWS.length * (rowH + gap) + 12, H = qualityY + 46;
@@ -969,25 +1043,27 @@
 
     ROWS.forEach(function (row, ri) {
       var y0 = m.t + ri * (rowH + gap) + 16, y1 = y0 + rowH, g = el('g');
-      var title = row.kind === 'ccf' ? row.title + ': channel 13 at or below ' + E.ccfK + ' K' : row.title;
+      var title = row.kind === 'ccf' ? (E ? row.title + ': channel 13 at or below ' + E.ccfK + ' K' : 'Vertical wind shear, ' + shearLabel(st.shearLayer) + ', within ' + (SH ? SH.radius_km : 300) + ' km (m/s)') : row.title;
       g.appendChild(el('text', { x: m.l, y: y0 - 6, fill: 'var(--ink-2)', 'font-size': 11.5, style: 'font-family:var(--sans)' }, title));
       ticks.forEach(function (tk) { g.appendChild(el('line', { x1: X(tk), x2: X(tk), y1: y0, y2: y1, stroke: 'var(--grid)' })); });
       var yOf, yTicks;
       if (row.kind === 'vort' || row.kind === 'ccf') {
-        var clipX = function (t) { return Math.max(m.l, Math.min(m.l + pw, X(t))); }, series, vd = E.doc.vort, lo = 0, hi = 1;
+        var clipX = function (t) { return Math.max(m.l, Math.min(m.l + pw, X(t))); }, series, vd = E ? E.doc.vort : null, lo = 0, hi = 1;
         if (row.kind === 'vort') {
           series = [['var(--ink)', null, vd.mean_low, vd.layers.low], ['var(--ink-2)', '6 4', vd.mean_mid, vd.layers.mid]].map(function (sr) {
             return { color: sr[0], dash: sr[1], label: sr[3][0] + '–' + sr[3][1] + ' hPa', pts: sr[2].map(function (v, i) { return [vd.t0 + i * vd.dt, v]; }) };
           });
         } else {
-          series = [{ color: 'var(--ink-2)', dash: null, pts: E.ccf.map(function (v, i) { return [E.t[i], v == null ? null : 100 * v]; }) }];
+          series = E ? [{ color: 'var(--ink-2)', dash: null, pts: E.ccf.map(function (v, i) { return [E.t[i], v == null ? null : 100 * v]; }) }] : [];
         }
         series.forEach(function (sr) { sr.pts.forEach(function (p) { if (p[1] != null) { lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); } }); });
         hi = row.kind === 'ccf' ? Math.min(100, nice125(hi, true)) : nice125(hi, true);
         lo = lo < 0 ? -nice125(-lo, true) : 0;
         yOf = function (v) { return y1 - (v - lo) / (hi - lo) * rowH; };
         yTicks = lo < 0 ? [lo, 0, hi] : [0, hi / 2, hi];
+        if (row.kind === 'ccf' && !E) { lo = 0; hi = 100; yTicks = [0, 50, 100]; }
         yTicks.forEach(function (v) {
+          if (row.kind === 'ccf' && !E) { g.appendChild(el('line', { x1: m.l, x2: m.l + pw, y1: yOf(v), y2: yOf(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)' })); return; }
           g.appendChild(el('line', { x1: m.l, x2: m.l + pw, y1: yOf(v), y2: yOf(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)' }));
           g.appendChild(el('text', { x: m.l - 6, y: yOf(v) + 3.5, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10.5 }, tickText(+v.toPrecision(3))));
         });
@@ -1011,6 +1087,28 @@
             g.appendChild(key);
             lx -= wLab + 44;
           });
+        }
+        if (row.kind === 'ccf' && SH) {         // shear on its own axis at the right, drawn over the cloud fraction
+          var shMax = 10, pts = SH.t.map(function (t, i) {
+            var u = SH[st.shearLayer].u[i], v = SH[st.shearLayer].v[i]; return [t, Math.hypot(u, v)];
+          });
+          pts.forEach(function (p) { shMax = Math.max(shMax, p[1]); });
+          shMax = nice125(shMax, true);
+          var yS = function (v) { return y1 - v / shMax * rowH; };
+          [0, shMax / 2, shMax].forEach(function (v) {
+            g.appendChild(el('text', { x: m.l + pw + 5, y: yS(v) + 3.5, 'text-anchor': 'start', fill: SHEAR_COLOR, 'font-size': 10.5 }, tickText(+v.toPrecision(3))));
+          });
+          var sp = pts.filter(function (p) { return p[0] >= tA - 6 * 3600 && p[0] <= tB + 6 * 3600; });
+          linePaths(sp.map(function (p) { return [clipX(p[0]), yS(p[1])]; })).forEach(function (seg) {
+            if (seg.length > 1) g.appendChild(el('path', { d: 'M' + seg.join('L'), fill: 'none', stroke: SHEAR_COLOR, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+          });
+          sp.forEach(function (p, i) {
+            if (p[0] < tA || p[0] > tB) return;
+            g.appendChild(el('circle', { cx: X(p[0]), cy: yS(p[1]), r: 2.6, fill: SHEAR_COLOR, stroke: 'var(--panel)', 'stroke-width': 1 }));
+          });
+          var lab = E ? (pw < 520 ? 'shear (m/s)' : shearLabel(st.shearLayer) + ' shear (m/s, right axis)') : shearLabel(st.shearLayer) + ' shear';
+          if (E) g.appendChild(el('text', { x: m.l + pw, y: y0 - 6, 'text-anchor': 'end', fill: SHEAR_COLOR, 'font-size': 10.5 }, lab));
+          any = any || sp.length > 0;
         }
         if (!any) g.appendChild(el('text', { x: m.l + pw / 2, y: (y0 + y1) / 2 + 4, 'text-anchor': 'middle', fill: 'var(--muted)', 'font-size': 11, style: 'font-family:var(--sans)' },
           row.kind === 'vort' ? 'ERA5 is not published for this period yet' : 'no usable scans'));
@@ -1123,13 +1221,17 @@
   function renderTable(bins) {
     var S = st.S, table = clear($('ts-table')), head = el('tr'), E = st.tsGeom && st.tsGeom.E;
     ['Bin start (UTC)', 'GLM groups', 'tobac features', 'Mean group area p25', 'Mean group area median', 'Mean group area p75', 'Mean group energy p25', 'Mean group energy median', 'Mean group energy p75', 'GLM coverage']
-      .concat(E ? ['Low-level vorticity', 'Mid-level vorticity', 'Cold cloud ≤ ' + E.ccfK + ' K'] : []).forEach(function (h) { head.appendChild(el('th', null, h)); });
+      .concat(E ? ['Low-level vorticity', 'Mid-level vorticity', 'Cold cloud ≤ ' + E.ccfK + ' K'] : [], st.SH ? ['Deep shear (m/s)', 'Deep shear toward (°)', 'Mid shear (m/s)', 'Mid shear toward (°)'] : []).forEach(function (h) { head.appendChild(el('th', null, h)); });
     table.appendChild(head);
     bins.forEach(function (b) {
       var tr = el('tr'), a = b.areaQ || [NaN, NaN, NaN], e = b.energyQ || [NaN, NaN, NaN], extra = [];
       if (E) {
         var eb = envBin(E, S.t0 + b.k0 * S.dt, S.t0 + b.k1 * S.dt);
         extra = [eb.low == null ? '–' : eb.low.toFixed(2), eb.mid == null ? '–' : eb.mid.toFixed(2), eb.ccf == null ? '–' : eb.ccf.toFixed(1) + '%'];
+      }
+      if (st.SH) {
+        var tm = S.t0 + (b.k0 + b.k1) / 2 * S.dt;
+        ['deep', 'mid'].forEach(function (ly) { var q = shearAt(tm, ly); extra.push(q ? q.mag.toFixed(1) : '–', q ? String(Math.round(q.hdg) % 360) : '–'); });
       }
       [fmtTime(S.t0 + b.k0 * S.dt, true), fmtInt(b.groups), fmtInt(b.feats), fmtVal(a[0]), fmtVal(a[1]), fmtVal(a[2]), fmtVal(e[0]), fmtVal(e[1]), fmtVal(e[2]), Math.round(b.cover * 100) + '%']
         .concat(extra).forEach(function (v) { tr.appendChild(el('td', null, v)); });
@@ -1247,6 +1349,10 @@
       rows.push(['Vorticity, low / mid', (eb.low == null ? '–' : eb.low.toFixed(1)) + ' / ' + (eb.mid == null ? '–' : eb.mid.toFixed(1)) + ' ×10⁻⁵ s⁻¹']);
       rows.push(['Cold cloud ≤ ' + G.E.ccfK + ' K', eb.ccf == null ? '–' : eb.ccf.toFixed(1) + '%']);
     }
+    if (st.SH) {
+      var tmid = t0 + st.bin * S.dt / 2;
+      ['deep', 'mid'].forEach(function (ly) { rows.push([(ly === 'deep' ? 'Deep' : 'Mid') + ' shear ' + shearLabel(ly), shearText(shearAt(tmid, ly))]); });
+    }
     if (S.genesis) rows.unshift(['Before genesis', ((S.genesis - t0) / 3600).toFixed(1) + ' h']);
     showTip(evt, fmtTime(t0) + ' to ' + fmtTime(t0 + st.bin * S.dt), rows);
   }
@@ -1275,6 +1381,7 @@
   function renderAll() {
     if (!st.S) return;
     readColors();
+    renderShearControl();
     cursorText(); renderTiles(); renderMapLegend(); drawMap(); renderIRLegend(); drawIR(); drawDist(); renderTS(); moveTrackMarker();
   }
   var playTimer = null;

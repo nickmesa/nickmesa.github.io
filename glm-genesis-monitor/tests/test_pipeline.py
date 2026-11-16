@@ -831,3 +831,97 @@ def test_env_live_run(envworld, monkeypatch):
     run_env_live.run(now=dt("2026-10-11T05:00"), archive={"al102026": dict(frames=12, hours=3, vort_hours=0, error="")})
     assert not (tmp / "env/al102026.json").exists() and not (tmp / "cache/env/al102026.pkl.gz").exists()
     assert "al102026" not in run_env.load_index()["cases"]
+
+
+# ------------------------------------------------------------- shear -------
+def uv_of(var, lev, lat, lon):
+    """Wind that grows with height: u = 2 (850-lev)/650 * 10 steady westerly increase, v = -5 at 200 hPa."""
+    f = (850.0 - lev) / 650.0
+    return 10.0 * f + 0 * lat if var == "UGRD" else -5.0 * f + 0 * lat
+
+
+def test_layer_shear_and_heading():
+    from pipeline import shear
+    lat, lon = np.arange(20.0, 10.0, -0.25), np.arange(-60.0, -50.0, 0.25)
+    winds = {}
+    for name, high in (("u", 10.0), ("v", -5.0)):
+        for lv in shear.LEVELS:
+            winds[(name, lv)] = np.full((len(lat), len(lon)), high * (850 - lv) / 650.0)
+    s = shear.layer_shear(winds, lat, lon, 15.0, -55.0)
+    assert s["deep"] == pytest.approx((10.0, -5.0))
+    assert s["mid"] == pytest.approx((10.0 * 350 / 650, -5.0 * 350 / 650))
+    mag, hdg = shear.magnitude_heading(0.0, -4.0)       # wind aloft from the north: shear vector points south
+    assert (mag, hdg) == (pytest.approx(4.0), pytest.approx(180.0))
+    assert shear.magnitude_heading(3.0, 0.0)[1] == pytest.approx(90.0)
+    assert shear.area_mean(lat, lon, winds[("u", 500)], 40.0, -55.0, 300.0) is None   # centre far outside the grid
+
+
+def test_gfs_reader_and_shear_record(envworld, monkeypatch):
+    from pipeline import shear
+    noaa, tmp = envworld
+    monkeypatch.setattr(config, "GFS_URL", config.GLM_URL.format(bucket="noaa-gfs-bdp-pds"))
+    monkeypatch.setattr(config, "SHEAR_DIR", str(tmp / "shear"))
+    when = datetime(2026, 10, 11, 6, tzinfo=timezone.utc)
+    body, idx = fake_noaa.gfs_file(uv_of)
+    key = f"gfs.20261011/06/atmos/gfs.t06z.pgrb2.0p25.f000"
+    noaa.objects["noaa-gfs-bdp-pds"] = {key: body, key + ".idx": idx.encode()}
+    lat, lon, w = shear.read_gfs(when, 15.0, -55.0)
+    assert set(w) == {(n, lv) for n in "uv" for lv in (850, 500, 200)}
+    assert lat.max() - lat.min() <= 9 and lon.max() < 0
+    s = shear.layer_shear(w, lat, lon, 15.0, -55.0)
+    assert s["deep"] == pytest.approx((10.0, -5.0), abs=1e-3)
+    assert noaa.ranged[key] < len(body)                  # only the six wind messages were read, not the file
+    with pytest.raises(FileNotFoundError):
+        shear.read_gfs(when + timedelta(hours=6), 15.0, -55.0)
+
+
+def _product(t0, hours, key="al092026"):
+    n = hours * 12 + 1
+    return {"id": key, "steps": {"t0": t0, "dt": 300, "n": n, "clat": [15.0] * n, "clon": [-55.0 + i * 0.0005 for i in range(n)]}}
+
+
+def test_shear_build_reuses_and_upgrades(tmp_path):
+    from pipeline import shear
+    now = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
+    t0 = int(datetime(2026, 10, 11, 1, tzinfo=timezone.utc).timestamp())       # ends 2026-10-11 13:00: 19 days old
+    prod = _product(t0, 12)
+    calls = {"gfs": 0, "era5": 0}
+
+    def make(src, scale, fail=False):
+        def read(when, clat, clon):
+            calls[src] += 1
+            if fail:
+                raise FileNotFoundError("nope")
+            lat, lon = np.arange(25.0, 5.0, -0.25), np.arange(-65.0, -45.0, 0.25)
+            return lat, lon, {(n, lv): np.full((len(lat), len(lon)), scale * h * (850 - lv) / 650.0)
+                              for n, h in (("u", 10.0), ("v", -5.0)) for lv in shear.LEVELS}
+        return read
+
+    a = shear.build(prod, None, now=now, say=lambda m: None, gfs=make("gfs", 1.0), era5=make("era5", 1.0, fail=True))
+    assert a["src"] == ["gfs"] * 4 and a["t"][0] == int(datetime(2026, 10, 11, 0, tzinfo=timezone.utc).timestamp())
+    assert a["deep"]["u"] == [10.0] * 4 and a["era5_try"]
+    calls.update(gfs=0, era5=0)
+    b = shear.build(prod, a, now=now + timedelta(hours=1), say=lambda m: None, gfs=make("gfs", 1.0), era5=make("era5", 1.1))
+    assert calls == {"gfs": 0, "era5": 0}                # ERA5 was asked about a day ago: not again yet, and GFS is kept
+    c = shear.build(prod, a, now=now + timedelta(hours=30), say=lambda m: None, gfs=make("gfs", 1.0), era5=make("era5", 1.1))
+    assert c["src"] == ["era5"] * 4 and c["deep"]["u"] == [11.0] * 4 and calls["gfs"] == 0
+    assert shear.needs_update({"status": "ended", "t_end": c["t_end"]}, c, now) is False
+    assert shear.needs_update({"status": "active", "t_end": c["t_end"]}, c, now) is True
+    # a fresh analysis is not asked for before GFS has posted it
+    young = _product(int((now - timedelta(hours=8)).timestamp()), 7)
+    d = shear.build(young, None, now=now, say=lambda m: None, gfs=make("gfs", 1.0), era5=make("era5", 1.0))
+    assert all(datetime.fromtimestamp(t, timezone.utc) <= now - timedelta(hours=config.GFS_DELAY_H) for t in d["t"])
+
+
+def test_era5_uv_reader(envworld, monkeypatch):
+    from pipeline import shear
+    noaa, tmp = envworld
+    monkeypatch.setattr(config, "ERA5_URL", config.GLM_URL.format(bucket="nsf-ncar-era5"))
+    day = datetime(2026, 5, 3, tzinfo=timezone.utc)
+    levels = [200.0, 300.0, 500.0, 700.0, 850.0]
+    noaa.objects["nsf-ncar-era5"] = {
+        fake_noaa.era5_uv_key(day, "u"): fake_noaa.era5_bytes(day, lambda h, lev, la, lo: 10.0 * (850 - lev) / 650.0 + 0 * la, "U", levels),
+        fake_noaa.era5_uv_key(day, "v"): fake_noaa.era5_bytes(day, lambda h, lev, la, lo: -5.0 * (850 - lev) / 650.0 + 0 * la, "V", levels)}
+    lat, lon, w = shear.read_era5(day + timedelta(hours=6), 15.0, -55.0)
+    s = shear.layer_shear(w, lat, lon, 15.0, -55.0)
+    assert s["deep"] == pytest.approx((10.0, -5.0), abs=1e-3) and s["mid"][0] == pytest.approx(10.0 * 350 / 650, abs=1e-3)

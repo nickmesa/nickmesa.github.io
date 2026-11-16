@@ -87,6 +87,22 @@ ERA5_RETRY_H = 24                  # ask again about missing ERA5 hours no more 
 ENV_LIVE_MAX_MIN = 45              # stop starting new records after this many minutes
 ENV_LIVE_ENDED_PER_RUN = 6         # records that have ended and have no IR yet, started per update
 
+# ------------------------------------------------ vertical wind shear -------
+# Area-mean wind difference between two pressure levels, as in the BEST_b*.nc files of the paper
+# (deep: 850 and 200 hPa, mid: 850 and 500 hPa, mean within 0-300 km of the centre). Stored as
+# vector components (m s-1) of upper minus lower wind; magnitude and heading are computed on the page.
+SHEAR_RADIUS_KM = 300.0
+SHEAR_LAYERS = {"deep": (850, 200), "mid": (850, 500)}
+SHEAR_STEP_H = 6                   # analyses are 6-hourly, the page interpolates between them
+SHEAR_REUSE_KM = 25.0              # a stored value is kept while the centre has moved less than this
+SHEAR_DIR = os.environ.get("GLM_SHEAR_DIR", "public-env/shear")
+GFS_URL = os.environ.get("GLM_GFS_URL", "https://noaa-gfs-bdp-pds.s3.amazonaws.com")
+GFS_FIRST = datetime(2021, 3, 1, tzinfo=timezone.utc)   # the AWS copy of GFS starts around here
+GFS_DELAY_H = 5                    # a 0.25 deg analysis is posted about 4 h after its time
+ERA5_UV_URL_SUFFIX = "ll025uv"
+SHEAR_MAX_MIN = 30
+SHEAR_ENDED_PER_RUN = 6
+
 # ------------------------------------------------------------ real time ----
 LATENCY_MIN = 10           # leave the newest minutes alone; files are still arriving
 MAX_EXTRAP_H = 12          # extrapolate the centre this far past the last fix
