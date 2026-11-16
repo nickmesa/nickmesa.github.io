@@ -142,24 +142,25 @@ ERA5_LEVELS = [300.0, 400.0, 500.0, 600.0, 700.0, 850.0, 900.0, 1000.0]
 ERA5_RES = 2.0
 
 
-def era5_bytes(day, vo_of):
+def era5_bytes(day, vo_of, varname="VO", levels=None):
     """A day of 'e5.oper.an.pl' vorticity. vo_of(hour, level, lat, lon) gives s-1 on a 2 degree grid (lon 0-358)."""
     lat = np.arange(90.0, -90.0 - 1e-6, -ERA5_RES)
     lon = np.arange(0.0, 360.0, ERA5_RES)
+    levels = list(levels or ERA5_LEVELS)
     ds = netCDF4.Dataset("fake.nc", mode="w", memory=4096)
     ds.createDimension("time", None)
-    for name, values in (("level", ERA5_LEVELS), ("latitude", lat), ("longitude", lon)):
+    for name, values in (("level", levels), ("latitude", lat), ("longitude", lon)):
         ds.createDimension(name, len(values))
         ds.createVariable(name, "f8", (name,))[:] = values
     t = ds.createVariable("time", "i4", ("time",))
     t.units = "hours since 1900-01-01 00:00:00"
     base = int((day - day.replace(year=1900, month=1, day=1, hour=0)).total_seconds() // 3600)
     t[:] = base + np.arange(24)
-    v = ds.createVariable("VO", "f4", ("time", "level", "latitude", "longitude"), zlib=True,
-                          chunksizes=(1, len(ERA5_LEVELS), len(lat), len(lon)), fill_value=9.999e20)
+    v = ds.createVariable(varname, "f4", ("time", "level", "latitude", "longitude"), zlib=True,
+                          chunksizes=(1, len(levels), len(lat), len(lon)), fill_value=9.999e20)
     glon, glat = np.meshgrid(lon, lat)
     for h in range(24):
-        v[h] = np.stack([vo_of(h, lev, glat, glon) for lev in ERA5_LEVELS]).astype("f4")
+        v[h] = np.stack([vo_of(h, lev, glat, glon) for lev in levels]).astype("f4")
     return bytes(ds.close())
 
 
@@ -279,3 +280,40 @@ class FakeNOAA:
     def stop(self):
         if self._server:
             self._server.shutdown()
+
+
+def era5_uv_key(day, name):
+    stamp = f"{day:%Y%m%d}"
+    code = {"u": "128_131_u", "v": "128_132_v"}[name]
+    return f"e5.oper.an.pl/{day:%Y%m}/e5.oper.an.pl.{code}.ll025uv.{stamp}00_{stamp}23.nc"
+
+
+def grib_message(values, lat0=40.0, lon0=0.0, step=1.0):
+    """One GRIB2 message: a regular lat/lon grid (north first, lon 0..) holding values[nj, ni]."""
+    import eccodes
+    nj, ni = values.shape
+    gid = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
+    for k, v in (("Ni", ni), ("Nj", nj), ("latitudeOfFirstGridPointInDegrees", lat0),
+                 ("latitudeOfLastGridPointInDegrees", lat0 - step * (nj - 1)),
+                 ("longitudeOfFirstGridPointInDegrees", lon0),
+                 ("longitudeOfLastGridPointInDegrees", lon0 + step * (ni - 1)),
+                 ("iDirectionIncrementInDegrees", step), ("jDirectionIncrementInDegrees", step)):
+        eccodes.codes_set(gid, k, v)
+    eccodes.codes_set_values(gid, values.ravel().astype("f8"))
+    out = eccodes.codes_get_message(gid)
+    eccodes.codes_release(gid)
+    return out
+
+
+def gfs_file(wind_of):
+    """(grib bytes, idx text) for a GFS analysis. wind_of(var, level, lat, lon) gives m s-1 on a 1 degree grid."""
+    lat = np.arange(40.0, -40.0 - 1e-6, -1.0)
+    lon = np.arange(0.0, 360.0, 1.0)
+    glon, glat = np.meshgrid(lon, lat)
+    body, idx, pos = b"", [], 0
+    for n, (var, lev) in enumerate([("UGRD", 850), ("UGRD", 500), ("UGRD", 200), ("VGRD", 850), ("VGRD", 500), ("VGRD", 200)] + [("TMP", 850)], 1):
+        msg = grib_message(wind_of(var, lev, glat, glon))
+        idx.append(f"{n}:{pos}:d=2026101100:{var}:{lev} mb:anl:")
+        body += msg
+        pos += len(msg)
+    return body, "\n".join(idx) + "\n"

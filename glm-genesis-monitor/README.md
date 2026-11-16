@@ -246,7 +246,7 @@ Set these in the `<script>` block before `app.js` in `lightning/index.html`:
 | `window.GLM_LIVE_ENV_BASE` | Where the IR images of real-time systems live. Defaults to `GLM_DATA_BASE` + `env/`. The infrared panel is hidden only if neither base is set. |
 | `window.GLM_CCF_K` | Cold cloud threshold in K (one of 195, 200, 205, 208, 210, 215, 220, 225, 230, 235, 240). Default 240. |
 | `window.GLM_VORT_LEVELS` | Vorticity contour levels in 10⁻⁵ s⁻¹. Default `[5, 10, 20, 40]`. |
-| `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: gray above −30 °C, then blue, green, yellow, orange and red toward colder tops. It is applied in the browser, so changing it needs no reprocessing. |
+| `window.GLM_IR_COLORS` | The infrared color scale, as `[°C, red, green, blue]` rows from warm to cold. The default is an enhanced scale of the kind used on tropical weather sites: the CSU real-time longwave enhancement: gray above −30 °C, then blue, green, yellow, orange, red, purple and white toward colder tops, with gray again below −90 °C. Missing data is drawn as 35 °C. It is applied in the browser, so changing it needs no reprocessing. |
 | `window.GLM_DOMAINS` | Fixed ranges for the color scale and axes, e.g. `{ area: [60, 3000], energy: [0.5, 500], life: [5, 240] }`, so cases can be compared by eye. By default each record uses its own 2nd to 98th percentile range. |
 
 ## Data files
@@ -283,3 +283,13 @@ does not read it.
 - The older `Lightning Timeseries` workflow in this repository is separate and unchanged.
 
 Not an official forecast product. See https://www.nhc.noaa.gov/ for outlooks and advisories.
+
+
+## Vertical wind shear
+
+`python -m pipeline.shear` writes `<shear dir>/<id>.json` for each record: deep (850 to 200 hPa) and mid (850 to 500 hPa) shear as the area mean within 300 km of the center, the same definition as the `BEST_b*.nc` files of the paper. Values are the u and v components (m/s) of upper minus lower wind every 6 hours, so a vector points downshear; the page works out speed and direction and interpolates in time. Each time keeps its source (`gfs` or `era5`).
+
+* **GFS** (NOAA open data, `s3://noaa-gfs-bdp-pds`, 0.25 degree analyses, from 2021) is read about 5 hours after each analysis time, with range requests for the six wind messages only (`eccodes` decodes them). It is what active storms use.
+* **ERA5** (`e5.oper.an.pl` u and v) replaces a GFS value once it is published (older than `ERA5_MIN_AGE_DAYS`; asked about once a day). A stored value is kept while the center moves less than `SHEAR_REUSE_KM`.
+* The real-time workflow runs it after the infrared step with `GLM_SHEAR_DIR=public/data/shear`, and the page reads `window.GLM_SHEAR_BASE` (default `<data base>/shear/`). Records that have ended and have no file yet are done a few per run (`SHEAR_ENDED_PER_RUN`).
+* The ERA5 file names (`...128_131_u.ll025uv...`, `...128_132_v.ll025uv...`) follow NCAR's layout but were tested only against stand-in files; check the first run's log.

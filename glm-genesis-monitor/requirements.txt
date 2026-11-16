@@ -10,3 +10,4 @@ trackpy==0.7
 requests==2.34.2
 h5py==3.16.0           # range reads of ABI and ERA5 files (pipeline/remote.py)
 pillow==12.3.0         # IR image sheets
+eccodes==2.50.0       # GFS GRIB2 messages (pipeline/shear.py)
